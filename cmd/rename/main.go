@@ -5,140 +5,159 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
-	"github.com/azhai/gre/pkg/regex"
-	"github.com/azhai/gre/pkg/walker"
+	"github.com/azhai/rego/pkg/args"
+	"github.com/azhai/rego/pkg/regex"
+	"github.com/azhai/rego/pkg/walker"
 )
 
+// Config holds the configuration for the rename command.
+// It extends args.CommonConfig with rename-specific options.
 type Config struct {
-	Find        string
-	Replace     string
-	ReplaceSet  bool
-	Paths       []string
-	IgnoreCase  bool
-	FilePattern string
-	DryRun      bool
-	Force       bool
-	IncludeDir  bool
+	args.CommonConfig
+	// Force indicates whether to proceed with conflicts
+	Force bool
+	// IncludeDir indicates whether to include directories
+	IncludeDir bool
+	// FixedString indicates whether to treat pattern as literal string
 	FixedString bool
 }
 
+// RenameOp represents a single rename operation.
 type RenameOp struct {
+	// Original is the original file name
 	Original string
-	NewName  string
-	BaseDir  string
+	// NewName is the new file name
+	NewName string
+	// BaseDir is the directory containing the file
+	BaseDir string
+	// Conflict indicates whether this operation has a conflict
 	Conflict bool
-	Error    error
+	// Error contains any error that occurred during the operation
+	Error error
 }
 
+// Renamer performs batch file renaming operations.
 type Renamer struct {
-	config  *Config
+	// config holds the renamer configuration
+	config *Config
+	// matcher is the regex matcher used for pattern matching
 	matcher *regex.Matcher
-	ops     []RenameOp
+	// ops is the list of rename operations to perform
+	ops []RenameOp
 }
 
+// NewConfig creates a new Config with default values.
+// Default values:
+//   - DryRun: true
 func NewConfig() *Config {
 	return &Config{
-		DryRun: true,
-		Paths:  []string{},
+		CommonConfig: args.CommonConfig{
+			DryRun: true,
+		},
 	}
 }
 
+func (c *Config) getOptions() []args.Option {
+	return []args.Option{
+		{
+			Short: "-d", Long: "--include-dir",
+			Help: "Include directories",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				c.IncludeDir = true
+				return true
+			},
+		},
+		{
+			Short: "-F", Long: "--fixed-strings",
+			Help: "Treat pattern as literal string",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				c.FixedString = true
+				return true
+			},
+		},
+		{
+			Short: "-f", Long: "--find", HasValue: true, ValueName: "PATTERN",
+			Help: "Pattern to find (regex supported)",
+			Handler: func(v string, cfg *args.CommonConfig) bool {
+				cfg.Pattern = v
+				return true
+			},
+		},
+		{
+			Short: "-g", Long: "--glob", HasValue: true, ValueName: "PATTERN",
+			Help: "File glob pattern (e.g., \"*.jpg\")",
+			Handler: func(v string, cfg *args.CommonConfig) bool {
+				cfg.FilePattern = v
+				return true
+			},
+		},
+		{
+			Short: "-i", Long: "--ignore-case",
+			Help: "Case insensitive matching",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				cfg.IgnoreCase = true
+				return true
+			},
+		},
+		{
+			Short: "-r", Long: "--replace", HasValue: true, ValueName: "STRING",
+			Help: "Replacement string",
+			Handler: func(v string, cfg *args.CommonConfig) bool {
+				cfg.Replace = v
+				cfg.ReplaceSet = true
+				return true
+			},
+		},
+		{
+			Short: "-x", Long: "--exec",
+			Help: "Execute the rename (default: dry-run)",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				cfg.DryRun = false
+				return true
+			},
+		},
+		{
+			Long: "--force",
+			Help: "Force rename even with conflicts",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				c.Force = true
+				return true
+			},
+		},
+	}
+}
+
+// ParseArgs parses command-line arguments using the shared args.ParseSimple function.
+// Returns true if parsing was successful, false otherwise.
 func (c *Config) ParseArgs() bool {
-	args := os.Args[1:]
-	if len(args) == 0 {
-		c.printUsage()
-		return false
-	}
-
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		if arg == "-i" || arg == "--ignore-case" {
-			c.IgnoreCase = true
-		} else if arg == "-f" || arg == "--find" {
-			if i+1 < len(args) {
-				c.Find = args[i+1]
-				i++
-			}
-		} else if arg == "-r" || arg == "--replace" {
-			if i+1 < len(args) {
-				c.Replace = args[i+1]
-				c.ReplaceSet = true
-				i++
-			}
-		} else if arg == "-g" || arg == "--glob" {
-			if i+1 < len(args) {
-				c.FilePattern = args[i+1]
-				i++
-			}
-		} else if arg == "-x" || arg == "--exec" {
-			c.DryRun = false
-		} else if arg == "--force" {
-			c.Force = true
-		} else if arg == "-d" || arg == "--include-dir" {
-			c.IncludeDir = true
-		} else if arg == "-F" || arg == "--fixed-strings" {
-			c.FixedString = true
-		} else if arg == "-h" || arg == "--help" {
-			c.printUsage()
-			return false
-		} else if len(arg) == 0 || arg[0] != '-' {
-			if c.Find == "" {
-				c.Find = arg
-			} else if !c.ReplaceSet {
-				c.Replace = arg
-				c.ReplaceSet = true
-			} else {
-				c.Paths = append(c.Paths, arg)
-			}
-		}
-		i++
-	}
-
-	if c.Find == "" {
-		fmt.Fprintln(os.Stderr, "Error: find pattern is required")
-		return false
-	}
-
-	if c.Replace == "" {
-		c.Replace = ""
-	}
-
-	if len(c.Paths) == 0 {
-		c.Paths = []string{"."}
-	}
-
-	return true
+	options := c.getOptions()
+	return args.ParseSimple(os.Args[1:], &c.CommonConfig, options, c.printUsage)
 }
 
+// printUsage prints the usage information for the rename command.
 func (c *Config) printUsage() {
+	options := c.getOptions()
 	fmt.Println(`rename - A batch file renaming tool inspired by f2
 
 Usage: rename [OPTIONS] FIND [REPLACE] [PATH...]
 
 Options:
-  -f, --find <PATTERN>      Pattern to find (regex supported)
-  -r, --replace <STRING>    Replacement string (use $1, $2 for groups)
-  -i, --ignore-case         Case insensitive matching
-  -g, --glob <PATTERN>      File glob pattern (e.g., "*.jpg")
-  -x, --exec                Execute the rename (default: dry-run)
-  --force                   Force rename even with conflicts
-  -d, --include-dir         Include directories
-  -F, --fixed-strings       Treat pattern as literal string
-  -h, --help                Show this help message
-
+` + args.FormatOptions(options) + `
 Examples:
   rename "foo" "bar"                      Replace 'foo' with 'bar'
-  rename -f "\.txt$" ".md"                Change .txt to .md extension
-  rename -f "(\d+)" "prefix_$1" -x        Add prefix to numbers
+  rename "\.txt$" ".md"                   Change .txt to .md extension
+  rename "(\d+)" "prefix_$1" -x           Add prefix to numbers
   rename -i "IMG" "img" -g "*.jpg"        Case conversion for jpg files
-  rename -f "^" "2024_" -x                Add date prefix to all files`)
+  rename "^" "2024_" -x                   Add date prefix to all files`)
 }
 
+// NewRenamer creates a new Renamer with the given configuration.
+// It initializes the regex matcher and returns an error if the pattern is invalid.
 func NewRenamer(config *Config) (*Renamer, error) {
 	matcher, err := regex.NewMatcher(&regex.Config{
-		Pattern:     config.Find,
+		Pattern:     config.Pattern,
 		IgnoreCase:  config.IgnoreCase,
 		FixedString: config.FixedString,
 	})
@@ -153,6 +172,8 @@ func NewRenamer(config *Config) (*Renamer, error) {
 	}, nil
 }
 
+// CollectFiles collects files to rename based on the pattern.
+// It walks through the directories and finds files that match the pattern.
 func (r *Renamer) CollectFiles() {
 	walkerConfig := walker.NewConfig()
 	walkerConfig.Paths = r.config.Paths
@@ -181,24 +202,35 @@ func (r *Renamer) CollectFiles() {
 	})
 }
 
+// DetectConflicts detects conflicts in the rename operations.
+// A conflict occurs when:
+// - Two files would be renamed to the same name
+// - A file would be renamed to an existing file name
 func (r *Renamer) DetectConflicts() {
 	newPaths := make(map[string]int)
 	for i, op := range r.ops {
 		newPath := filepath.Join(op.BaseDir, op.NewName)
-		if count, exists := newPaths[newPath]; exists {
+		key := strings.ToLower(newPath)
+		if count, exists := newPaths[key]; exists {
 			r.ops[i].Conflict = true
 			r.ops[count].Conflict = true
 		} else {
-			newPaths[newPath] = i
+			newPaths[key] = i
 		}
 
 		fullPath := filepath.Join(op.BaseDir, op.NewName)
-		if _, err := os.Stat(fullPath); err == nil {
-			r.ops[i].Conflict = true
+		fullPathLower := strings.ToLower(fullPath)
+		originalPathLower := strings.ToLower(filepath.Join(op.BaseDir, op.Original))
+		if fullPathLower != originalPathLower {
+			if _, err := os.Stat(fullPath); err == nil {
+				r.ops[i].Conflict = true
+			}
 		}
 	}
 }
 
+// PrintPreview prints a preview of the rename operations.
+// It shows the original and new file names, and highlights any conflicts.
 func (r *Renamer) PrintPreview() {
 	if len(r.ops) == 0 {
 		fmt.Println("No files to rename")
@@ -235,6 +267,9 @@ func (r *Renamer) PrintPreview() {
 	}
 }
 
+// Execute executes the rename operations.
+// In dry-run mode, it returns nil without making any changes.
+// If there are conflicts and Force is not set, it returns an error.
 func (r *Renamer) Execute() error {
 	if r.config.DryRun {
 		return nil
@@ -273,6 +308,11 @@ func (r *Renamer) Execute() error {
 	return nil
 }
 
+// Run runs the complete rename workflow:
+// 1. Collect files to rename
+// 2. Detect conflicts
+// 3. Print preview
+// 4. Execute rename operations
 func (r *Renamer) Run() {
 	r.CollectFiles()
 	r.DetectConflicts()

@@ -8,136 +8,184 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/azhai/gre/pkg/regex"
-	"github.com/azhai/gre/pkg/walker"
+	"github.com/azhai/rego/pkg/args"
+	"github.com/azhai/rego/pkg/regex"
+	"github.com/azhai/rego/pkg/walker"
 )
 
+// Config holds the configuration for the replace command.
+// It extends args.CommonConfig with replace-specific options.
 type Config struct {
-	Pattern     string
-	Replace     string
-	ReplaceSet  bool
-	Paths       []string
-	IgnoreCase  bool
+	args.CommonConfig
+	// ShowLineNum indicates whether to show line numbers in output
 	ShowLineNum bool
-	Color       bool
-	FilePattern string
-	Workers     int
-	DryRun      bool
+	// Color indicates whether to use colored output
+	Color bool
+	// Workers is the number of concurrent worker goroutines
+	Workers int
+	// FixedString indicates whether to treat pattern as literal string
+	FixedString bool
 }
 
+// Match represents a single match found in a file.
 type Match struct {
-	Path    string
+	// Path is the file path where the match was found
+	Path string
+	// LineNum is the line number where the match was found
 	LineNum int
-	Line    string
+	// Line is the content of the line containing the match
+	Line string
+	// Matches is a slice of [start, end] index pairs for each match in the line
 	Matches [][]int
 }
 
+// Searcher performs search and replace operations.
+// It uses concurrent workers to process multiple files in parallel.
 type Searcher struct {
-	config  *Config
+	// config holds the searcher configuration
+	config *Config
+	// matcher is the regex matcher used for pattern matching
 	matcher *regex.Matcher
+	// results is the channel through which match results are sent
 	results chan Match
-	wg      sync.WaitGroup
+	// wg is used for synchronization of worker goroutines
+	wg sync.WaitGroup
 }
 
+// NewConfig creates a new Config with default values.
+// Default values:
+//   - ShowLineNum: true
+//   - Color: true
+//   - Workers: number of CPU cores
+//   - DryRun: true
 func NewConfig() *Config {
 	return &Config{
 		ShowLineNum: true,
 		Color:       true,
 		Workers:     runtime.NumCPU(),
-		DryRun:      true,
+		CommonConfig: args.CommonConfig{
+			DryRun: true,
+		},
 	}
 }
 
+func (c *Config) getOptions() []args.Option {
+	return []args.Option{
+		{
+			Short: "-F", Long: "--fixed-strings",
+			Help: "Treat pattern as literal string",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				c.FixedString = true
+				return true
+			},
+		},
+		{
+			Short: "-g", Long: "--glob", HasValue: true, ValueName: "PATTERN",
+			Help: "File glob pattern (e.g., \"*.go\")",
+			Handler: func(v string, cfg *args.CommonConfig) bool {
+				cfg.FilePattern = v
+				return true
+			},
+		},
+		{
+			Short: "-i", Long: "--ignore-case",
+			Help: "Case insensitive search",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				cfg.IgnoreCase = true
+				return true
+			},
+		},
+		{
+			Short: "-j", Long: "--threads", HasValue: true, ValueName: "N",
+			Help: "Number of worker threads",
+			Handler: func(v string, cfg *args.CommonConfig) bool {
+				fmt.Sscanf(v, "%d", &c.Workers)
+				return true
+			},
+		},
+		{
+			Short: "-n", Long: "--line-number",
+			Help: "Show line numbers (default)",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				c.ShowLineNum = true
+				return true
+			},
+		},
+		{
+			Short: "-N", Long: "--no-line-number",
+			Help: "Hide line numbers",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				c.ShowLineNum = false
+				return true
+			},
+		},
+		{
+			Long: "--no-color",
+			Help: "Disable colored output",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				c.Color = false
+				return true
+			},
+		},
+		{
+			Short: "-f", Long: "--find", HasValue: true, ValueName: "PATTERN",
+			Help: "Pattern to find (regex supported)",
+			Handler: func(v string, cfg *args.CommonConfig) bool {
+				cfg.Pattern = v
+				return true
+			},
+		},
+		{
+			Short: "-r", Long: "--replace", HasValue: true, ValueName: "STRING",
+			Help: "Replacement string",
+			Handler: func(v string, cfg *args.CommonConfig) bool {
+				cfg.Replace = v
+				cfg.ReplaceSet = true
+				return true
+			},
+		},
+		{
+			Short: "-x", Long: "--exec",
+			Help: "Execute replacement (default: dry-run)",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				cfg.DryRun = false
+				return true
+			},
+		},
+	}
+}
+
+// ParseArgs parses command-line arguments using the shared args.ParseSimple function.
+// Returns true if parsing was successful, false otherwise.
 func (c *Config) ParseArgs() bool {
-	args := os.Args[1:]
-	if len(args) == 0 {
-		c.printUsage()
-		return false
-	}
-
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		if arg == "-i" || arg == "--ignore-case" {
-			c.IgnoreCase = true
-		} else if arg == "-n" || arg == "--line-number" {
-			c.ShowLineNum = true
-		} else if arg == "-N" || arg == "--no-line-number" {
-			c.ShowLineNum = false
-		} else if arg == "--no-color" {
-			c.Color = false
-		} else if arg == "-g" || arg == "--glob" {
-			if i+1 < len(args) {
-				c.FilePattern = args[i+1]
-				i++
-			}
-		} else if arg == "-j" || arg == "--threads" {
-			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &c.Workers)
-				i++
-			}
-		} else if arg == "-x" || arg == "--exec" {
-			c.DryRun = false
-		} else if arg == "-h" || arg == "--help" {
-			c.printUsage()
-			return false
-		} else if len(arg) == 0 || arg[0] != '-' {
-			if c.Pattern == "" {
-				c.Pattern = arg
-			} else if !c.ReplaceSet {
-				c.Replace = arg
-				c.ReplaceSet = true
-			} else {
-				c.Paths = append(c.Paths, arg)
-			}
-		}
-		i++
-	}
-
-	if c.Pattern == "" {
-		fmt.Fprintln(os.Stderr, "Error: pattern is required")
-		return false
-	}
-
-	if c.ReplaceSet && c.Replace == "" {
-		c.Replace = ""
-	}
-
-	if len(c.Paths) == 0 {
-		c.Paths = []string{"."}
-	}
-
-	return true
+	options := c.getOptions()
+	return args.ParseSimple(os.Args[1:], &c.CommonConfig, options, c.printUsage)
 }
 
+// printUsage prints the usage information for the replace command.
 func (c *Config) printUsage() {
+	options := c.getOptions()
 	fmt.Println(`replace - A fast search and replace tool inspired by ripgrep
 
 Usage: replace [OPTIONS] PATTERN [REPLACE] [PATH...]
 
 Options:
-  -i, --ignore-case    Case insensitive search
-  -n, --line-number    Show line numbers (default: true)
-  -N, --no-line-number Hide line numbers
-  --no-color           Disable colored output
-  -g, --glob <PATTERN> File glob pattern (e.g., "*.go")
-  -j, --threads <NUM>  Number of worker threads (default: CPU count)
-  -x, --exec           Execute the replace (default: dry-run)
-  -h, --help           Show this help message
-
+` + args.FormatOptions(options) + `
 Examples:
-  replace "pattern"                    Search for pattern in current directory
-  replace -i "pattern" /path           Case insensitive search
-  replace -g "*.go" "func"             Search only in Go files
-  replace "TODO" "FIXME" -x            Replace TODO with FIXME
-  replace "TODO" src/ test/            Search in multiple directories`)
+  replace "foo" "bar"                      Replace 'foo' with 'bar' (dry-run)
+  replace "foo" "bar" -x                   Execute the replacement
+  replace "old" "new" ./src                Search and replace in ./src
+  replace -i "error" "warning"             Case insensitive replacement
+  replace "\d+" "NUM" -g "*.log"           Replace numbers in log files`)
 }
 
+// NewSearcher creates a new Searcher with the given configuration.
+// It initializes the regex matcher and returns an error if the pattern is invalid.
 func NewSearcher(config *Config) (*Searcher, error) {
 	matcher, err := regex.NewMatcher(&regex.Config{
 		Pattern:     config.Pattern,
 		IgnoreCase:  config.IgnoreCase,
-		FixedString: !config.ReplaceSet,
+		FixedString: config.FixedString,
 	})
 	if err != nil {
 		return nil, err
@@ -150,6 +198,9 @@ func NewSearcher(config *Config) (*Searcher, error) {
 	}, nil
 }
 
+// Search performs a search operation across all files.
+// It uses concurrent workers to process files in parallel and sends
+// match results to the results channel.
 func (s *Searcher) Search() {
 	walkerConfig := walker.NewConfig()
 	walkerConfig.Paths = s.config.Paths
@@ -167,25 +218,30 @@ func (s *Searcher) Search() {
 		close(filesChan)
 	}()
 
+	var wg sync.WaitGroup
 	for i := 0; i < s.config.Workers; i++ {
-		s.wg.Add(1)
-		go s.worker(filesChan)
+		wg.Add(1)
+		go s.searchWorker(filesChan, &wg)
 	}
 
 	go func() {
-		s.wg.Wait()
+		wg.Wait()
 		close(s.results)
 	}()
 }
 
-func (s *Searcher) worker(files <-chan walker.FileInfo) {
-	defer s.wg.Done()
+// searchWorker is a worker function that processes files from the channel.
+// It reads each file and sends matches to the results channel.
+func (s *Searcher) searchWorker(files <-chan walker.FileInfo, wg *sync.WaitGroup) {
+	defer wg.Done()
 
 	for file := range files {
 		s.searchFile(file.Path)
 	}
 }
 
+// searchFile searches for matches in a single file.
+// It reads the file line by line and sends matches to the results channel.
 func (s *Searcher) searchFile(path string) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -212,62 +268,45 @@ func (s *Searcher) searchFile(path string) {
 	}
 }
 
+// PrintResults prints all matches from the results channel.
 func (s *Searcher) PrintResults() {
 	for match := range s.results {
 		s.printMatch(match)
 	}
 }
 
-func (s *Searcher) printMatch(m Match) {
-	path := m.Path
+// printMatch prints a single match with optional coloring.
+// It shows the file path, line number (if enabled), and the matched line
+// with the matched text highlighted in red.
+func (s *Searcher) printMatch(match Match) {
+	if s.config.ShowLineNum {
+		fmt.Printf("%s:%d:", match.Path, match.LineNum)
+	} else {
+		fmt.Printf("%s:", match.Path)
+	}
 
 	if s.config.Color {
-		path = fmt.Sprintf("\x1b[35m%s\x1b[0m", path)
-	}
-
-	if s.config.ShowLineNum {
-		lineNumStr := fmt.Sprintf("%d", m.LineNum)
-		if s.config.Color {
-			lineNumStr = fmt.Sprintf("\x1b[32m%s\x1b[0m", lineNumStr)
+		lastEnd := 0
+		line := match.Line
+		for _, m := range match.Matches {
+			fmt.Print(line[lastEnd:m[0]])
+			fmt.Printf("\x1b[31m%s\x1b[0m", line[m[0]:m[1]])
+			lastEnd = m[1]
 		}
-		fmt.Printf("%s:%s:%s\n", path, lineNumStr, s.highlightLine(m.Line, m.Matches))
+		fmt.Println(line[lastEnd:])
 	} else {
-		fmt.Printf("%s:%s\n", path, s.highlightLine(m.Line, m.Matches))
+		fmt.Println(match.Line)
 	}
 }
 
-func (s *Searcher) highlightLine(line string, matches [][]int) string {
-	if !s.config.Color || len(matches) == 0 {
-		return line
-	}
-
-	var result strings.Builder
-	lastEnd := 0
-
-	for _, match := range matches {
-		start := match[0]
-		end := match[1]
-
-		if start > lastEnd {
-			result.WriteString(line[lastEnd:start])
-		}
-
-		result.WriteString(fmt.Sprintf("\x1b[31;1m%s\x1b[0m", line[start:end]))
-		lastEnd = end
-	}
-
-	if lastEnd < len(line) {
-		result.WriteString(line[lastEnd:])
-	}
-
-	return result.String()
-}
-
+// Replace performs a replace operation across all files.
+// It uses concurrent workers to process files in parallel.
+// In dry-run mode, it shows what would be replaced without making changes.
 func (s *Searcher) Replace() {
 	walkerConfig := walker.NewConfig()
 	walkerConfig.Paths = s.config.Paths
 	walkerConfig.FilePattern = s.config.FilePattern
-	walkerConfig.SkipBinary = true
+	walkerConfig.SkipBinary = false
 
 	fileWalker := walker.New(walkerConfig)
 	files := fileWalker.Walk()
@@ -289,6 +328,8 @@ func (s *Searcher) Replace() {
 	wg.Wait()
 }
 
+// replaceWorker is a worker function that processes files from the channel.
+// It performs replacement on each file.
 func (s *Searcher) replaceWorker(files <-chan walker.FileInfo, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -297,6 +338,9 @@ func (s *Searcher) replaceWorker(files <-chan walker.FileInfo, wg *sync.WaitGrou
 	}
 }
 
+// replaceFile performs replacement on a single file.
+// It reads the file, performs the replacement, and shows the changes.
+// In dry-run mode, it only shows what would be changed without modifying the file.
 func (s *Searcher) replaceFile(path string) {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -318,6 +362,28 @@ func (s *Searcher) replaceFile(path string) {
 			fmt.Fprintf(os.Stderr, "\x1b[31mError writing %s: %v\x1b[0m\n", path, err)
 		} else {
 			fmt.Printf("\x1b[32m[REPLACED]\x1b[0m %s\n", path)
+		}
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(content)))
+	lineNum := 0
+
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Bytes()
+
+		lineMatches := s.matcher.FindAll(line)
+		if lineMatches != nil {
+			s.printMatch(Match{
+				Path:    path,
+				LineNum: lineNum,
+				Line:    string(line),
+				Matches: lineMatches,
+			})
+			newLine := s.matcher.ReplaceAllString(string(line), s.config.Replace)
+			if newLine != string(line) {
+				fmt.Printf("\x1b[36m-> %s\x1b[0m\n", newLine)
+			}
 		}
 	}
 }

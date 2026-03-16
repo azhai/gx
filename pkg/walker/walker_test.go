@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/azhai/gre/pkg/regex"
+	"github.com/azhai/rego/pkg/regex"
 )
 
 func createTestDir(t *testing.T, name string) string {
