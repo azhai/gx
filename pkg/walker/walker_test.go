@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/azhai/gre/pkg/regex"
 )
 
 func createTestDir(t *testing.T, name string) string {
@@ -206,5 +208,57 @@ func TestDefaultSkipDirs(t *testing.T) {
 		if !DefaultSkipDirs[dir] {
 			t.Errorf("Expected %q in DefaultSkipDirs", dir)
 		}
+	}
+}
+
+func TestWalker_SkipBinary(t *testing.T) {
+	dir := createTestDir(t, "walker_binary_test")
+	defer os.RemoveAll(dir)
+
+	createTestFile(t, dir, "text.txt", "hello world")
+
+	binaryContent := []byte{0x00, 0x01, 0x02, 0x03}
+	binaryPath := filepath.Join(dir, "binary.bin")
+	if err := os.WriteFile(binaryPath, binaryContent, 0644); err != nil {
+		t.Fatalf("Failed to create binary file: %v", err)
+	}
+
+	config := NewConfig()
+	config.Paths = []string{dir}
+	config.SkipBinary = true
+
+	walker := New(config)
+	files := walker.Walk()
+
+	for file := range files {
+		if file.Name == "binary.bin" {
+			t.Error("Should skip binary file when SkipBinary is true")
+		}
+	}
+}
+
+func TestWalker_ReplaceAllString(t *testing.T) {
+	m, err := regex.NewMatcher(&regex.Config{Pattern: `foo`})
+	if err != nil {
+		t.Fatalf("NewMatcher() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		input   string
+		replace string
+		want    string
+	}{
+		{"simple replace", "foo bar", "baz", "baz bar"},
+		{"multiple replace", "foo foo foo", "x", "x x x"},
+		{"no match", "hello world", "baz", "hello world"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := m.ReplaceAllString(tt.input, tt.replace); got != tt.want {
+				t.Errorf("ReplaceAllString(%q, %q) = %q, want %q", tt.input, tt.replace, got, tt.want)
+			}
+		})
 	}
 }

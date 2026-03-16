@@ -216,3 +216,44 @@ func TestMatcher_GetPattern(t *testing.T) {
 		t.Errorf("GetPattern() = %q, want %q", pattern, "(?i)hello")
 	}
 }
+
+func TestMatcher_ReplaceAll(t *testing.T) {
+	m, err := NewMatcher(&Config{Pattern: `foo`})
+	if err != nil {
+		t.Fatalf("NewMatcher() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		input   []byte
+		replace []byte
+		want    []byte
+	}{
+		{"simple replace", []byte("foo bar"), []byte("baz"), []byte("baz bar")},
+		{"multiple replace", []byte("foo foo foo"), []byte("x"), []byte("x x x")},
+		{"no match", []byte("hello world"), []byte("baz"), []byte("hello world")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := m.ReplaceAll(tt.input, tt.replace); string(got) != string(tt.want) {
+				t.Errorf("ReplaceAll(%q, %q) = %q, want %q", tt.input, tt.replace, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatcher_FixedStringReplace(t *testing.T) {
+	m, err := NewMatcher(&Config{Pattern: "[test]", FixedString: true})
+	if err != nil {
+		t.Fatalf("NewMatcher() error = %v", err)
+	}
+
+	input := []byte("value [test] and [test]")
+	expected := []byte("value replace and replace")
+	result := m.ReplaceAll(input, []byte("replace"))
+
+	if string(result) != string(expected) {
+		t.Errorf("ReplaceAll with FixedString failed.\nGot: %q\nWant: %q", result, expected)
+	}
+}

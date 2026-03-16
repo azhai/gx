@@ -80,7 +80,7 @@ func (m *Matcher) ReplaceWithSubmatches(s string, replacePattern string) string 
 
 	for i := len(submatches) - 2; i >= 2; i -= 2 {
 		if submatches[i] != -1 {
-			groupNum := (i - 2) / 2 + 1
+			groupNum := (i-2)/2 + 1
 			placeholder := fmt.Sprintf("$%d", groupNum)
 			value := s[submatches[i]:submatches[i+1]]
 			result = regexp.MustCompile(regexp.QuoteMeta(placeholder)).ReplaceAllString(result, value)

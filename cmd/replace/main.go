@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/azhai/gre/pkg/regex"
@@ -13,12 +14,15 @@ import (
 
 type Config struct {
 	Pattern     string
+	Replace     string
+	ReplaceSet  bool
 	Paths       []string
 	IgnoreCase  bool
 	ShowLineNum bool
 	Color       bool
 	FilePattern string
 	Workers     int
+	DryRun      bool
 }
 
 type Match struct {
@@ -40,6 +44,7 @@ func NewConfig() *Config {
 		ShowLineNum: true,
 		Color:       true,
 		Workers:     runtime.NumCPU(),
+		DryRun:      true,
 	}
 }
 
@@ -71,12 +76,17 @@ func (c *Config) ParseArgs() bool {
 				fmt.Sscanf(args[i+1], "%d", &c.Workers)
 				i++
 			}
+		} else if arg == "-x" || arg == "--exec" {
+			c.DryRun = false
 		} else if arg == "-h" || arg == "--help" {
 			c.printUsage()
 			return false
-		} else if arg[0] != '-' {
+		} else if len(arg) == 0 || arg[0] != '-' {
 			if c.Pattern == "" {
 				c.Pattern = arg
+			} else if !c.ReplaceSet {
+				c.Replace = arg
+				c.ReplaceSet = true
 			} else {
 				c.Paths = append(c.Paths, arg)
 			}
@@ -89,6 +99,10 @@ func (c *Config) ParseArgs() bool {
 		return false
 	}
 
+	if c.ReplaceSet && c.Replace == "" {
+		c.Replace = ""
+	}
+
 	if len(c.Paths) == 0 {
 		c.Paths = []string{"."}
 	}
@@ -97,9 +111,9 @@ func (c *Config) ParseArgs() bool {
 }
 
 func (c *Config) printUsage() {
-	fmt.Println(`replace - A fast search tool inspired by ripgrep
+	fmt.Println(`replace - A fast search and replace tool inspired by ripgrep
 
-Usage: replace [OPTIONS] PATTERN [PATH...]
+Usage: replace [OPTIONS] PATTERN [REPLACE] [PATH...]
 
 Options:
   -i, --ignore-case    Case insensitive search
@@ -108,19 +122,22 @@ Options:
   --no-color           Disable colored output
   -g, --glob <PATTERN> File glob pattern (e.g., "*.go")
   -j, --threads <NUM>  Number of worker threads (default: CPU count)
+  -x, --exec           Execute the replace (default: dry-run)
   -h, --help           Show this help message
 
 Examples:
   replace "pattern"                    Search for pattern in current directory
   replace -i "pattern" /path           Case insensitive search
   replace -g "*.go" "func"             Search only in Go files
+  replace "TODO" "FIXME" -x            Replace TODO with FIXME
   replace "TODO" src/ test/            Search in multiple directories`)
 }
 
 func NewSearcher(config *Config) (*Searcher, error) {
 	matcher, err := regex.NewMatcher(&regex.Config{
-		Pattern:    config.Pattern,
-		IgnoreCase: config.IgnoreCase,
+		Pattern:     config.Pattern,
+		IgnoreCase:  config.IgnoreCase,
+		FixedString: !config.ReplaceSet,
 	})
 	if err != nil {
 		return nil, err
@@ -224,7 +241,7 @@ func (s *Searcher) highlightLine(line string, matches [][]int) string {
 		return line
 	}
 
-	result := ""
+	var result strings.Builder
 	lastEnd := 0
 
 	for _, match := range matches {
@@ -232,18 +249,77 @@ func (s *Searcher) highlightLine(line string, matches [][]int) string {
 		end := match[1]
 
 		if start > lastEnd {
-			result += line[lastEnd:start]
+			result.WriteString(line[lastEnd:start])
 		}
 
-		result += fmt.Sprintf("\x1b[31;1m%s\x1b[0m", line[start:end])
+		result.WriteString(fmt.Sprintf("\x1b[31;1m%s\x1b[0m", line[start:end]))
 		lastEnd = end
 	}
 
 	if lastEnd < len(line) {
-		result += line[lastEnd:]
+		result.WriteString(line[lastEnd:])
 	}
 
-	return result
+	return result.String()
+}
+
+func (s *Searcher) Replace() {
+	walkerConfig := walker.NewConfig()
+	walkerConfig.Paths = s.config.Paths
+	walkerConfig.FilePattern = s.config.FilePattern
+	walkerConfig.SkipBinary = true
+
+	fileWalker := walker.New(walkerConfig)
+	files := fileWalker.Walk()
+
+	filesChan := make(chan walker.FileInfo, 1000)
+	go func() {
+		for f := range files {
+			filesChan <- f
+		}
+		close(filesChan)
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < s.config.Workers; i++ {
+		wg.Add(1)
+		go s.replaceWorker(filesChan, &wg)
+	}
+
+	wg.Wait()
+}
+
+func (s *Searcher) replaceWorker(files <-chan walker.FileInfo, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for file := range files {
+		s.replaceFile(file.Path)
+	}
+}
+
+func (s *Searcher) replaceFile(path string) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	matches := s.matcher.FindAll(content)
+	if matches == nil {
+		return
+	}
+
+	newContent := s.matcher.ReplaceAll(content, []byte(s.config.Replace))
+
+	if s.config.DryRun {
+		fmt.Printf("\x1b[33m[DRY-RUN]\x1b[0m %s\n", path)
+	} else {
+		err := os.WriteFile(path, newContent, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\x1b[31mError writing %s: %v\x1b[0m\n", path, err)
+		} else {
+			fmt.Printf("\x1b[32m[REPLACED]\x1b[0m %s\n", path)
+		}
+	}
 }
 
 func main() {
@@ -258,6 +334,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	searcher.Search()
-	searcher.PrintResults()
+	if config.ReplaceSet {
+		searcher.Replace()
+	} else {
+		searcher.Search()
+		searcher.PrintResults()
+	}
 }
