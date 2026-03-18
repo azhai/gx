@@ -1,4 +1,4 @@
-package main
+package rename
 
 import (
 	"fmt"
@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/azhai/rego/pkg/args"
-	"github.com/azhai/rego/pkg/regex"
-	"github.com/azhai/rego/pkg/walker"
+	"github.com/azhai/gx/args"
+	"github.com/azhai/gx/regex"
+	"github.com/azhai/gx/walker"
 )
 
 // Config holds the configuration for the rename command.
@@ -322,19 +322,4 @@ func (r *Renamer) Run() {
 		fmt.Fprintf(os.Stderr, "\x1b[31mError: %v\x1b[0m\n", err)
 		os.Exit(1)
 	}
-}
-
-func main() {
-	config := NewConfig()
-	if !config.ParseArgs() {
-		os.Exit(1)
-	}
-
-	renamer, err := NewRenamer(config)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	renamer.Run()
 }

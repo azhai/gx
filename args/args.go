@@ -93,8 +93,8 @@ func ParseCommon(args []string, config *CommonConfig, options []Option, printUsa
 		} else if arg == "-h" || arg == "--help" {
 			printUsage()
 			return false
-		} else if len(arg) == 0 || arg[0] != '-' {
-			// Handle positional arguments
+		} else {
+			// Handle positional arguments (including unknown options treated as positional)
 			if config.Pattern == "" {
 				config.Pattern = arg
 			} else if !config.ReplaceSet {

@@ -1,5 +1,5 @@
-SINGLETON =
-COMMANDS  = rename replace
+SINGLETON = gx
+COMMANDS  =
 
 
 ifndef GOAMD64

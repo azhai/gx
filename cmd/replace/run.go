@@ -1,4 +1,4 @@
-package main
+package replace
 
 import (
 	"bufio"
@@ -8,9 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/azhai/rego/pkg/args"
-	"github.com/azhai/rego/pkg/regex"
-	"github.com/azhai/rego/pkg/walker"
+	"github.com/azhai/gx/args"
+	"github.com/azhai/gx/regex"
+	"github.com/azhai/gx/walker"
 )
 
 // Config holds the configuration for the replace command.
@@ -385,25 +385,5 @@ func (s *Searcher) replaceFile(path string) {
 				fmt.Printf("\x1b[36m-> %s\x1b[0m\n", newLine)
 			}
 		}
-	}
-}
-
-func main() {
-	config := NewConfig()
-	if !config.ParseArgs() {
-		os.Exit(1)
-	}
-
-	searcher, err := NewSearcher(config)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if config.ReplaceSet {
-		searcher.Replace()
-	} else {
-		searcher.Search()
-		searcher.PrintResults()
 	}
 }

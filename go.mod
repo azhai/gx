@@ -1,3 +1,3 @@
-module github.com/azhai/rego
+module github.com/azhai/gx
 
 go 1.26.0

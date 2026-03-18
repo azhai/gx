@@ -5,6 +5,7 @@ package walker
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -190,7 +191,7 @@ func (w *Walker) isBinaryFile(path string) bool {
 
 	buf := make([]byte, 512)
 	n, err := file.Read(buf)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return true
 	}
 
