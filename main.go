@@ -9,10 +9,16 @@ import (
 	"github.com/azhai/gx/cmd/replace"
 )
 
+// Populated by -ldflags during build (see Makefile).
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
-		os.Exit(1)
+		os.Exit(2) // no args → exit 2 (align with git/grep convention)
 	}
 
 	command := os.Args[1]
@@ -27,24 +33,30 @@ func main() {
 		runRename()
 	case "-h", "--help":
 		printUsage()
+	case "-V", "--version":
+		fmt.Printf("gx version %s (commit: %s)\n", version, commit)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
-		os.Exit(1)
+		os.Exit(2)
 	}
 }
 
 func printUsage() {
-	fmt.Println(`gx - A collection of file utilities
+	fmt.Println(`gx - A handy text-processing utility (sed/awk style)
 
 Usage: gx <command> [OPTIONS] [ARGS...]
 
 Commands:
-  find    Search for patterns in files (like grep)
-  replace Search and replace text in files
-  rename  Batch rename files
+  find     Search for patterns in files (like grep)
+  replace  Search and replace text in files
+  rename   Batch rename files
 
-Use "gx <command> --help" for more information about a command.
+Global Flags:
+  -h, --help       Show help
+  -V, --version    Show version
+
+Use "gx <command> --help" for command-specific options.
 
 Examples:
   gx find "pattern" ./src
