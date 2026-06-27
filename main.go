@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/azhai/gx/cmd/find"
 	"github.com/azhai/gx/cmd/rename"
 	"github.com/azhai/gx/cmd/replace"
 )
@@ -52,19 +53,22 @@ Examples:
 }
 
 func runFind() {
-	config := replace.NewConfig()
+	config := find.NewConfig()
 	if !config.ParseArgs() {
 		os.Exit(1)
 	}
 
-	searcher, err := replace.NewSearcher(config)
+	searcher, err := find.NewSearcher(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	searcher.Search()
-	searcher.PrintResults()
+	count := searcher.PrintResults()
+	if count == 0 {
+		os.Exit(1) // exit 1 when no matches (grep convention)
+	}
 }
 
 func runReplace() {
