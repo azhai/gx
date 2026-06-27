@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/azhai/gx/cmd/cut"
 	"github.com/azhai/gx/cmd/find"
+	"github.com/azhai/gx/cmd/list"
 	"github.com/azhai/gx/cmd/rename"
 	"github.com/azhai/gx/cmd/replace"
+	"github.com/azhai/gx/cmd/trans"
 )
 
 // Populated by -ldflags during build (see Makefile).
@@ -27,10 +30,16 @@ func main() {
 	switch command {
 	case "find":
 		runFind()
+	case "list":
+		runList()
 	case "replace":
 		runReplace()
 	case "rename":
 		runRename()
+	case "cut":
+		os.Exit(cut.Run())
+	case "trans":
+		os.Exit(trans.Run())
 	case "-h", "--help":
 		printUsage()
 	case "-V", "--version":
@@ -49,8 +58,11 @@ Usage: gx <command> [OPTIONS] [ARGS...]
 
 Commands:
   find     Search for patterns in files (like grep)
+  list     List files containing matches (like grep -l)
   replace  Search and replace text in files
   rename   Batch rename files
+  cut      Extract fields from delimited text (like cut -f)
+  trans    Apply text transformations (upper/lower/trim/...)
 
 Global Flags:
   -h, --help       Show help
@@ -60,26 +72,48 @@ Use "gx <command> --help" for command-specific options.
 
 Examples:
   gx find "pattern" ./src
+  gx list "TODO" -g "*.go"
   gx replace "old" "new" ./src -x
-  gx rename "foo" "bar" -x`)
+  gx rename "foo" "bar" -x
+  cut -f 2 -d , file.csv
+  cat file | gx trans upper`)
 }
 
 func runFind() {
 	config := find.NewConfig()
 	if !config.ParseArgs() {
-		os.Exit(1)
+		os.Exit(2) // argument error → exit 2 (spec 4.4)
 	}
 
 	searcher, err := find.NewSearcher(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
 
 	searcher.Search()
 	count := searcher.PrintResults()
 	if count == 0 {
-		os.Exit(1) // exit 1 when no matches (grep convention)
+		os.Exit(1) // no match → exit 1 (grep convention)
+	}
+}
+
+func runList() {
+	config := list.NewConfig()
+	if !config.ParseArgs() {
+		os.Exit(2)
+	}
+
+	searcher, err := list.NewSearcher(config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(2)
+	}
+
+	searcher.Search()
+	count := searcher.PrintResults()
+	if count == 0 {
+		os.Exit(1) // no matching files → exit 1 (grep -l convention)
 	}
 }
 
