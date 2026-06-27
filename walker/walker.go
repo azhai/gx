@@ -6,6 +6,7 @@ package walker
 import (
 	"bytes"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -115,15 +116,20 @@ func (w *Walker) Walk() <-chan FileInfo {
 
 // walkDir traverses a single directory recursively.
 // It applies the configured filters and sends matching files to the channel.
+//
+// Uses filepath.WalkDir (not filepath.Walk) to avoid an os.Lstat call per
+// file: WalkDir receives a fs.DirEntry, which is cached from the directory
+// read, while Walk receives an os.FileInfo that requires an extra stat.
 func (w *Walker) walkDir(root string) {
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 
+		name := d.Name()
+
 		// Handle directories
-		if info.IsDir() {
-			name := info.Name()
+		if d.IsDir() {
 			// Skip configured directories
 			if w.config.SkipDirs[name] {
 				return filepath.SkipDir
@@ -141,13 +147,13 @@ func (w *Walker) walkDir(root string) {
 		}
 
 		// Skip non-regular files (symlinks, devices, etc.)
-		if !info.Mode().IsRegular() {
+		if !d.Type().IsRegular() {
 			return nil
 		}
 
 		// Apply glob pattern filter
 		if w.config.FilePattern != "" {
-			matched, err := filepath.Match(w.config.FilePattern, info.Name())
+			matched, err := filepath.Match(w.config.FilePattern, name)
 			if err != nil || !matched {
 				return nil
 			}
@@ -158,10 +164,16 @@ func (w *Walker) walkDir(root string) {
 			return nil
 		}
 
+		// DirEntry doesn't carry size; stat only for regular files we emit.
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
 		// Send file info to channel
 		w.files <- FileInfo{
 			Path:  path,
-			Name:  info.Name(),
+			Name:  name,
 			IsDir: false,
 			Size:  info.Size(),
 		}

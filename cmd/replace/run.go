@@ -2,10 +2,10 @@ package replace
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/azhai/gx/args"
@@ -250,6 +250,9 @@ func (s *Searcher) searchFile(path string) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	// bufio.Scanner's default max token size is 64KB, which silently
+	// truncates long lines (e.g. minified JS). Raise to 1MB.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -365,7 +368,12 @@ func (s *Searcher) replaceFile(path string) {
 		}
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(content)))
+	// Reuse the already-read content bytes for scanning instead of
+	// allocating a second copy via string(content) + strings.NewReader.
+	// bytes.NewReader wraps the slice without copying.
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	// Match the 1MB buffer used in searchFile so long lines aren't truncated.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	lineNum := 0
 
 	for scanner.Scan() {

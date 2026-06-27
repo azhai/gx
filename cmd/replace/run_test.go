@@ -518,3 +518,42 @@ func TestSearcher_EmptyFile(t *testing.T) {
 		t.Errorf("Expected 0 matches in empty file, got %d", len(matches))
 	}
 }
+
+// TestSearcher_LongLine locks in the 1MB scanner buffer:
+// the default bufio.Scanner token limit is 64KB, which would silently
+// truncate a >64KB line and miss matches beyond the boundary.
+func TestSearcher_LongLine(t *testing.T) {
+	dir := createTestDir(t, "replace_longline_test")
+	defer os.RemoveAll(dir)
+
+	// 100KB of padding before the needle — exceeds the default 64KB limit.
+	padding := make([]byte, 100*1024)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	content := string(padding) + "NEEDLE" + string(padding)
+	createTestFile(t, dir, "long.txt", content)
+
+	config := NewConfig()
+	config.Pattern = "NEEDLE"
+	config.Paths = []string{dir}
+
+	searcher, err := NewSearcher(config)
+	if err != nil {
+		t.Fatalf("NewSearcher() error = %v", err)
+	}
+
+	searcher.Search()
+
+	var matches []Match
+	for match := range searcher.results {
+		matches = append(matches, match)
+	}
+
+	if len(matches) != 1 {
+		t.Fatalf("Expected 1 match in long-line file, got %d (scanner buffer may have truncated the line)", len(matches))
+	}
+	if matches[0].LineNum != 1 {
+		t.Errorf("Expected match on line 1, got line %d", matches[0].LineNum)
+	}
+}
