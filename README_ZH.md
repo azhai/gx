@@ -1,10 +1,17 @@
 # gx
 
-用 Go 编写的快速文件搜索和批量重命名工具。
+![gx](docs/gx-logo.svg)
+
+用 Go 编写的快速文本处理工具：文件搜索（find/list）、批量重命名、以及类 Unix 文本过滤器（cut/trans/script）。
 
 （本项目代码由AI生成，再经人工检查和修正）
 
 ## 功能特性
+
+- **list**: 列出包含匹配的文件（类似 `grep -l`）
+  - 每个文件首次匹配即短路，不扫描完整内容
+  - 与 `find` 相同的 glob / 正则 / 并发选项
+  - 可与 `xargs` 组合批量处理匹配文件
 
 - **find**: 快速文件内容搜索工具（灵感来自 ripgrep）
   - 默认单进程，`-j N` / `-j 0`（全部核心）启用多进程
@@ -33,17 +40,40 @@
   - 强制模式解决冲突
   - 大小写不敏感文件系统支持
 
+- **cut**: 从分隔文本中提取字段（POSIX `cut` 子集）
+  - 仅 `-f` 字段模式（不支持 `-c`/`-b`）
+  - 字段列表：`N`、`N-M`、`N-`（开放范围）、`-M`（1..M）、混合 `1,3-5,7-`
+  - 自定义分隔符（`-d`，支持 `\t` `\n` `\\` 转义）
+  - `-s` 跳过不含分隔符的行
+  - `--output-delimiter` 重组输出
+  - 从文件或 stdin 读取（无路径 / `-` → stdin）
+
+- **trans**: 逐行文本变换
+  - `upper`、`lower`、`trim`、`squeeze`（折叠连续空白）、`reverse`（按 rune 反转）
+  - 从文件或 stdin 读取，输出到 stdout
+  - 管道友好：`cat f | gx trans upper | gx trans trim`
+
+- **script**: 用 [Tengo](https://github.com/d5/tengo) 脚本处理输入（sed/awk 风格）
+  - 行模式（默认）：注入 `line`/`lineno`/`filename`
+  - 文件模式（`--whole`）：注入 `content`/`filename`
+  - 通过 `__out` 控制输出（string → 输出，`false` → 过滤）
+  - 默认安全模块白名单；`--unsafe` 开启全部
+  - 单次执行超时（`--timeout`）
+
 ## 项目结构
 
 ```
 gx/
 ├── cmd/
 │   ├── find/          # 文件内容搜索命令（类似 grep）
+│   ├── list/          # 列出包含匹配的文件（类似 grep -l）
 │   ├── replace/       # 文件内容搜索和替换命令
-│   └── rename/        # 批量文件重命名命令
-├── pkg/
-│   ├── processor/    # 共享的遍历 + 工作池引擎
-│   └── stream/        # 统一的 stdin / 文件输入
+│   ├── rename/        # 批量文件重命名命令
+│   ├── cut/           # 字段提取（cut -f 子集）
+│   ├── trans/         # 逐行文本变换（upper/lower/...）
+│   └── script/        # Tengo 脚本运行器（sed/awk 风格）
+├── processor/         # 共享的遍历 + 工作池引擎
+├── stream/            # 统一的 stdin / 文件输入
 ├── args/              # 共享参数解析功能
 ├── regex/             # 正则表达式匹配封装
 ├── walker/            # 并发文件系统遍历
@@ -69,11 +99,11 @@ gx/
   - Glob 模式过滤
   - 二进制文件检测
 
-- **pkg/processor**: 共享的文件处理引擎：
+- **processor**: 共享的文件处理引擎：
   - 基于 walker 输出的工作池流水线
   - `FileProcessor` 接口（ProcessFile + HandleResult），find/replace 复用
 
-- **pkg/stream**: 统一的 stdin / 文件输入：
+- **stream**: 统一的 stdin / 文件输入：
   - `IsStdin` / `OpenInput` / `ReadAll`
   - 虚拟文件名 `<stdin>`，用于匹配结果上报（供后续命令使用）
 
@@ -100,8 +130,12 @@ Usage: gx <command> [OPTIONS] [ARGS...]
 
 Commands:
   find     Search for patterns in files (like grep)
+  list     List files containing matches (like grep -l)
   replace  Search and replace text in files
   rename   Batch rename files
+  cut      Extract fields from delimited text (like cut -f)
+  trans    Apply text transformations (upper/lower/trim/...)
+  script   Run a Tengo script over input (sed/awk style)
 
 Global Flags:
   -h, --help       Show help
@@ -213,6 +247,131 @@ gx rename -i "IMG" "img" -g "*.jpg"  # 将 jpg 文件的 IMG 转换为小写
 gx rename "^" "2024_" -x             # 为所有文件添加 2024_ 前缀
 gx rename -F "[test]" "demo" -x      # 替换字面字符串 '[test]'
 ```
+
+### list - 列出包含匹配的文件
+
+`list` 是 `find` 的 `grep -l` 对应物：不打印每个匹配行，而是打印
+每个包含至少一处匹配的文件的路径。它会按文件短路，比 `find` 快
+很多（当你只需要文件列表时）。
+
+```bash
+# 查找包含某个模式的文件（只打印路径）
+gx list "TODO" src/                   # 类似 grep -rl "TODO" src/
+gx list -g "*.go" "fmt.Sprintf"       # 只在 Go 文件中
+gx list -i "error" logs/              # 忽略大小写
+
+# 配合 xargs 对匹配文件批量操作
+gx list "deprecated" -g "*.py" | xargs sed -i 's/deprecated/legacy/g'
+```
+
+选项同 `find`（`-g`、`-i`、`-F`、`-j`、`--no-color`），但 `-n`/`-N`
+无意义（不打印行号）。
+
+### cut - 从分隔文本中提取字段
+
+`cut` 是 POSIX `cut` 的子集：仅支持 `-f`（字段模式）。从文件或
+stdin 读取（无路径 / `-` → stdin），输出到 stdout。
+
+```bash
+# 字段选择
+echo "a,b,c" | gx cut -f 2 -d ,                # → b
+echo "a,b,c,d" | gx cut -f 2-3 -d ,            # → b,c
+echo "a,b,c,d,e" | gx cut -f 2- -d ,           # → b,c,d,e（开放范围）
+echo "a,b,c,d" | gx cut -f -2 -d ,            # → a,b（1..2）
+echo "a,b,c,d,e" | gx cut -f 1,3-4 -d ,        # → a,c,d（混合）
+
+# Tab 分隔（默认分隔符）
+printf "x\ty\tz\n" | gx cut -f 2               # → y
+
+# 跳过不含分隔符的行
+printf "a,b\nno-delim\nc,d\n" | gx cut -f 1 -d , -s  # → a\nc
+
+# 自定义输出分隔符
+echo "a,b,c" | gx cut -f 1,3 -d , --output-delimiter=:  # → a:c
+
+# 从文件读取
+gx cut -f 1 -d , data.csv
+```
+
+字段规范语法（1-based，同 POSIX cut）：
+- `N`       单字段
+- `N-M`     闭区间
+- `N-`      开放范围（N 到行尾）
+- `-M`      1 到 M
+- 混合      逗号分隔，如 `1,3-5,7-`
+
+`-d` / `--output-delimiter` 支持转义：`\t` `\n` `\\`。
+
+### trans - 文本变换
+
+`trans` 对每行输入应用一种内置变换。从文件或 stdin 读取（无路径 /
+`-` → stdin），输出到 stdout。
+
+```bash
+echo "hello" | gx trans upper                 # → HELLO
+echo "  Hi  " | gx trans trim                 # → Hi
+echo "  a   b   c  " | gx trans squeeze       # → a b c
+echo "abc" | gx trans reverse                # → cba
+
+# 从文件读取
+gx trans lower names.txt
+
+# 管道（链式变换）
+cat file | gx trans trim | gx trans lower
+```
+
+可用变换：
+
+| 变换      | 效果                                          |
+|-----------|-----------------------------------------------|
+| `upper`   | 全部转大写                                    |
+| `lower`   | 全部转小写                                    |
+| `trim`    | 去除首尾空白                                  |
+| `squeeze` | 折叠连续空白为单个空格，并 trim               |
+| `reverse` | 按 rune 反转字符串（Unicode 安全）            |
+
+### script - 用 Tengo 脚本处理输入（sed/awk 风格）
+
+`script` 用 [Tengo](https://github.com/d5/tengo) 脚本对输入文本做任意
+变换，是 sed/awk 的轻量替代。脚本编译一次，按行或按文件执行，结果
+写入 stdout，结果赋值给 `__out` 变量（string → 输出，`false`/`undefined`
+→ 过滤，其他 → `fmt.Sprint`）。
+
+**两种模式：**
+
+- **行模式（默认）**：注入 `line`（string）、`lineno`（int，1-based）、
+  `filename`（string，stdin 时为 `<stdin>`）。
+- **文件模式（`--whole`）**：注入 `content`（整个文件内容 string）、
+  `filename`（string）。
+
+```bash
+# -e：内联表达式；安全模块（text/json/...）自动预导入
+echo "hi" | gx script -e 'text.to_upper(line)'          # → HI
+
+# 过滤：丢弃偶数行
+seq 4 | gx script -e 'lineno % 2 == 1 ? line : false'
+
+# 用 fmt.sprintf 加行号
+seq 3 | gx script -e 'fmt.sprintf("%d: %s", lineno, line)'
+
+# 文件模式：统计换行数
+printf 'a\nb\nc\n' | gx script --whole -e 'text.count(content, "\n")'  # → 3
+
+# -f：加载完整脚本（自己控制 __out）
+gx script --whole -f agg.tengo *.log
+```
+
+**安全模型** — 默认只开放纯计算类 Tengo 模块：`fmt`、`text`
+（strings/strconv/regexp）、`json`、`math`、`times`、`base64`、`hex`、
+`enum`。`--unsafe` 开启全部模块（`os`/`exec`/`file`/...）——仅在可信
+输入下使用。
+
+`-e` 会自动预导入所有安全模块，无需手写 `import`；`-f` 脚本需自行
+`import`。
+
+其他标志：`--timeout D`（单次执行超时，默认 `1s`）。
+
+完整模块/API 参考：[docs/script-api.md](docs/script-api.md)。
 
 ## 从源码构建
 

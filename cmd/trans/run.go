@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/azhai/gx/args"
-	"github.com/azhai/gx/pkg/stream"
+	"github.com/azhai/gx/stream"
 )
 
 // transforms is the registry of built-in transformations.

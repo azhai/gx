@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"github.com/azhai/gx/args"
-	"github.com/azhai/gx/pkg/stream"
+	"github.com/azhai/gx/stream"
 )
 
 // fieldRange describes a contiguous run of fields to select.

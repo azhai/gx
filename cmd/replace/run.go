@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/azhai/gx/args"
-	"github.com/azhai/gx/pkg/processor"
+	"github.com/azhai/gx/processor"
 	"github.com/azhai/gx/regex"
 	"github.com/azhai/gx/walker"
 )

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/azhai/gx/cmd/cut"
@@ -9,6 +10,7 @@ import (
 	"github.com/azhai/gx/cmd/list"
 	"github.com/azhai/gx/cmd/rename"
 	"github.com/azhai/gx/cmd/replace"
+	"github.com/azhai/gx/cmd/script"
 	"github.com/azhai/gx/cmd/trans"
 )
 
@@ -18,14 +20,36 @@ var (
 	commit  = "unknown"
 )
 
+// Version returns the build version string, e.g. "1.2.0 (commit: abc1234)".
+// Exposed for tests and for any future subcommand that needs to report it.
+func Version() string {
+	return fmt.Sprintf("%s (commit: %s)", version, commit)
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(2) // no args → exit 2 (align with git/grep convention)
+	os.Exit(runMain(os.Args, os.Stdout, os.Stderr))
+}
+
+// runMain is the testable entry point. It dispatches on argv[1] and
+// returns the process exit code. Subcommand implementations own their
+// own stdout/stderr (they call os.Stdout directly), so we only pass
+// writers down for the top-level usage/version output. The writers are
+// still useful for tests to capture and assert on those two paths.
+//
+// Exit codes:
+//
+//	0  success with output / matches
+//	1  success without output (grep "no match" convention)
+//	2  argument or runtime error
+func runMain(argv []string, out, errOut io.Writer) int {
+	if len(argv) < 2 {
+		printUsageTo(out)
+		return 2
 	}
 
-	command := os.Args[1]
-	os.Args = os.Args[1:]
+	command := argv[1]
+	// Hand the per-command argv (without the gx binary name) down.
+	os.Args = argv[1:]
 
 	switch command {
 	case "find":
@@ -37,22 +61,27 @@ func main() {
 	case "rename":
 		runRename()
 	case "cut":
-		os.Exit(cut.Run())
+		return cut.Run()
 	case "trans":
-		os.Exit(trans.Run())
+		return trans.Run()
+	case "script":
+		return script.Run()
 	case "-h", "--help":
-		printUsage()
+		printUsageTo(out)
+		return 0
 	case "-V", "--version":
-		fmt.Printf("gx version %s (commit: %s)\n", version, commit)
+		fmt.Fprintf(out, "gx version %s\n", Version())
+		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
-		printUsage()
-		os.Exit(2)
+		fmt.Fprintf(errOut, "Unknown command: %s\n\n", command)
+		printUsageTo(errOut)
+		return 2
 	}
+	return 0
 }
 
-func printUsage() {
-	fmt.Println(`gx - A handy text-processing utility (sed/awk style)
+func printUsageTo(w io.Writer) {
+	fmt.Fprintln(w, `gx - A handy text-processing utility (sed/awk style)
 
 Usage: gx <command> [OPTIONS] [ARGS...]
 
@@ -63,6 +92,7 @@ Commands:
   rename   Batch rename files
   cut      Extract fields from delimited text (like cut -f)
   trans    Apply text transformations (upper/lower/trim/...)
+  script   Run a Tengo script over input (sed/awk style)
 
 Global Flags:
   -h, --help       Show help
@@ -76,59 +106,59 @@ Examples:
   gx replace "old" "new" ./src -x
   gx rename "foo" "bar" -x
   cut -f 2 -d , file.csv
-  cat file | gx trans upper`)
+  cat file | gx trans upper
+  echo "hi" | gx script -e 'text.to_upper(line)'`)
 }
 
+// runFind dispatches the find subcommand. Subcommand owns exit code via
+// os.Exit (kept as-is to avoid touching its tested entry path).
 func runFind() {
 	config := find.NewConfig()
 	if !config.ParseArgs() {
-		os.Exit(2) // argument error → exit 2 (spec 4.4)
+		os.Exit(2)
 	}
-
 	searcher, err := find.NewSearcher(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(2)
 	}
-
 	searcher.Search()
-	count := searcher.PrintResults()
-	if count == 0 {
-		os.Exit(1) // no match → exit 1 (grep convention)
+	if searcher.PrintResults() == 0 {
+		os.Exit(1) // no match → grep convention
 	}
 }
 
+// runList dispatches the list subcommand. Short-circuits with exit 1
+// when no file matched (mirrors `grep -l`).
 func runList() {
 	config := list.NewConfig()
 	if !config.ParseArgs() {
 		os.Exit(2)
 	}
-
 	searcher, err := list.NewSearcher(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(2)
 	}
-
 	searcher.Search()
-	count := searcher.PrintResults()
-	if count == 0 {
-		os.Exit(1) // no matching files → exit 1 (grep -l convention)
+	if searcher.PrintResults() == 0 {
+		os.Exit(1)
 	}
 }
 
+// runReplace dispatches the replace subcommand. Exit 1 covers both
+// "no match found" and "argument error" (matches historical behavior of
+// the subcommand).
 func runReplace() {
 	config := replace.NewConfig()
 	if !config.ParseArgs() {
 		os.Exit(1)
 	}
-
 	searcher, err := replace.NewSearcher(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-
 	if config.ReplaceSet {
 		searcher.Replace()
 	} else {
@@ -137,17 +167,17 @@ func runReplace() {
 	}
 }
 
+// runRename dispatches the rename subcommand. Returns the exit code
+// from rename.Run (0 success, 1 no-op, 2 partial failure) to the caller.
 func runRename() {
 	config := rename.NewConfig()
 	if !config.ParseArgs() {
-		os.Exit(2) // argument error → exit 2 (spec 4.4)
+		os.Exit(2)
 	}
-
 	renamer, err := rename.NewRenamer(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(2) // invalid pattern → exit 2 (spec 4.4)
+		os.Exit(2)
 	}
-
 	os.Exit(renamer.Run())
 }

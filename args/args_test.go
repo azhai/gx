@@ -39,7 +39,7 @@ func TestParseSimple(t *testing.T) {
 			name:            "two arguments - pattern and path (literal quotes preserved)",
 			args:            []string{"TODO", `"FIXME"`},
 			expectedPattern: "TODO",
-			expectedPaths:  []string{`"FIXME"`},
+			expectedPaths:   []string{`"FIXME"`},
 			expectedDryRun:  true,
 		},
 		{

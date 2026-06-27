@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/azhai/gx/args"
-	"github.com/azhai/gx/pkg/processor"
+	"github.com/azhai/gx/processor"
 )
 
 func TestNewConfig(t *testing.T) {

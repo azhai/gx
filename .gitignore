@@ -31,8 +31,12 @@ projs/
 repos/
 
 # IDE
+.arts/
+.codebuddy/
 .idea/
 .vscode/
+docs/design/
+docs/plans/
 *.swp
 *.swo
 *~
