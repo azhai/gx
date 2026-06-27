@@ -31,13 +31,16 @@ func TestParseSimple(t *testing.T) {
 			expectedDryRun:  true,
 		},
 		{
-			name:               "two arguments - pattern and quoted replacement",
-			args:               []string{"TODO", `"FIXME"`},
-			expectedPattern:    "TODO",
-			expectedReplace:    "FIXME",
-			expectedReplaceSet: true,
-			expectedPaths:      []string{"."},
-			expectedDryRun:     true,
+			// Two positional args are now always PATTERN PATH (matches `find`).
+			// Quote-detection was removed: the shell strips quotes before
+			// the program sees them, so the heuristic only triggered when
+			// the user wrapped the value in literal double quotes, which
+			// was surprising. Use `-r REPLACE` or 3 positional args instead.
+			name:            "two arguments - pattern and path (literal quotes preserved)",
+			args:            []string{"TODO", `"FIXME"`},
+			expectedPattern: "TODO",
+			expectedPaths:  []string{`"FIXME"`},
+			expectedDryRun:  true,
 		},
 		{
 			name:               "three arguments - pattern, replace, path",

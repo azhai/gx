@@ -538,11 +538,11 @@ func TestConfig_ParseArgs(t *testing.T) {
 			expectedPaths:   []string{"/src"},
 		},
 		{
-			name:            "pattern and quoted replace",
+			// Two positional args are now PATTERN PATH; quote detection removed.
+			name:            "pattern and literal-quoted path",
 			args:            []string{"old", `"new"`},
 			expectedPattern: "old",
-			expectedReplace: "new",
-			expectedPaths:   []string{"."},
+			expectedPaths:   []string{`"new"`},
 		},
 	}
 

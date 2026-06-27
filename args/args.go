@@ -119,13 +119,14 @@ func ParseCommon(args []string, config *CommonConfig, options []Option, printUsa
 //
 // Special cases:
 //   - 1 argument: treated as pattern, path defaults to "."
-//   - 2 arguments: if second arg is quoted, it's treated as replacement;
-//     otherwise, it's treated as a path
+//   - 2 arguments: second arg is always treated as a path (matches `find`
+//     semantics). To specify a replacement, use `-r REPLACE` or three
+//     positional arguments: `replace PATTERN REPLACE [PATH...]`.
 //
-// This allows for more intuitive command-line usage:
-//
-//	replace "pattern" /path     # search in /path
-//	replace "pattern" "replace" # replace pattern with replace
+// This avoids the fragile heuristic of detecting quotes in the second
+// argument: the shell strips quotes before the program receives them,
+// so detecting them only worked when the user wrapped the value in
+// literal double quotes, which was surprising and non-obvious.
 func ParseSimple(args []string, config *CommonConfig, options []Option, printUsage func()) bool {
 	var size int
 	if size = len(args); size == 0 {
@@ -171,16 +172,10 @@ func ParseSimple(args []string, config *CommonConfig, options []Option, printUsa
 	}
 
 	if size == 2 {
+		// Two positional args: PATTERN PATH (matches `find` semantics).
+		// Use `-r REPLACE` or 3 positional args to specify a replacement.
 		config.Pattern = args[0]
-		// Check if second argument is quoted (treat as replacement)
-		if args[1][0] == '"' && args[1][len(args[1])-1] == '"' {
-			config.Replace = args[1][1 : len(args[1])-1]
-			config.ReplaceSet = true
-			config.Paths = []string{"."}
-		} else {
-			// Treat as path
-			config.Paths = []string{args[1]}
-		}
+		config.Paths = []string{args[1]}
 		return true
 	}
 
