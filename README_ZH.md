@@ -7,7 +7,7 @@
 ## 功能特性
 
 - **find**: 快速文件内容搜索工具（灵感来自 ripgrep）
-  - 多线程搜索
+  - 默认单进程，`-j N` / `-j 0`（全部核心）启用多进程
   - 支持正则表达式
   - 彩色高亮输出
   - 行号显示
@@ -15,7 +15,7 @@
   - 二进制文件检测
 
 - **replace**: 快速文件内容搜索和替换工具（灵感来自 ripgrep）
-  - 多线程搜索和替换
+  - 默认单进程，`-j N` / `-j 0`（全部核心）启用多进程
   - 支持正则表达式
   - 彩色高亮输出
   - 行号显示
@@ -38,8 +38,12 @@
 ```
 gx/
 ├── cmd/
+│   ├── find/          # 文件内容搜索命令（类似 grep）
 │   ├── replace/       # 文件内容搜索和替换命令
 │   └── rename/        # 批量文件重命名命令
+├── pkg/
+│   ├── processor/    # 共享的遍历 + 工作池引擎
+│   └── stream/        # 统一的 stdin / 文件输入
 ├── args/              # 共享参数解析功能
 ├── regex/             # 正则表达式匹配封装
 ├── walker/            # 并发文件系统遍历
@@ -65,6 +69,14 @@ gx/
   - Glob 模式过滤
   - 二进制文件检测
 
+- **pkg/processor**: 共享的文件处理引擎：
+  - 基于 walker 输出的工作池流水线
+  - `FileProcessor` 接口（ProcessFile + HandleResult），find/replace 复用
+
+- **pkg/stream**: 统一的 stdin / 文件输入：
+  - `IsStdin` / `OpenInput` / `ReadAll`
+  - 虚拟文件名 `<stdin>`，用于匹配结果上报（供后续命令使用）
+
 ## 安装
 
 ```bash
@@ -82,17 +94,46 @@ make build
 ## 使用说明
 
 ```
-gx - A collection of file utilities
+gx - A handy text-processing utility (sed/awk style)
 
 Usage: gx <command> [OPTIONS] [ARGS...]
 
 Commands:
-  find    Search for patterns in files (like grep)
-  replace Search and replace text in files
-  rename  Batch rename files
+  find     Search for patterns in files (like grep)
+  replace  Search and replace text in files
+  rename   Batch rename files
 
-Use "gx <command> --help" for more information about a command.
+Global Flags:
+  -h, --help       Show help
+  -V, --version    Show version
+
+Use "gx <command> --help" for command-specific options.
 ```
+
+### 退出码
+
+| Code | 含义                                          |
+|------|-----------------------------------------------|
+| 0    | 成功，且有匹配 / 有文件被重命名               |
+| 1    | 成功，但无匹配 / 无文件被重命名               |
+| 2    | 错误（参数错误、IO 失败等）                   |
+
+退出码遵循 grep 约定，使 `gx` 在 shell 管道和条件判断中自然组合：
+
+```bash
+if gx find "TODO" src/; then
+  echo "存在 TODO"
+fi
+```
+
+### 版本
+
+```bash
+gx --version      # 打印版本 + 提交号
+gx -V             # 简写形式
+```
+
+版本和提交号在构建时通过 git 注入（见 `make one` / `make build`），因此二进制会报告它所基于的确切标签和提交。
 
 ### find - 文件内容搜索
 
@@ -105,7 +146,7 @@ gx find "pattern" /path/to/dir       # 在指定目录搜索
 gx find -F "pattern"                 # 将模式视为字面字符串
 gx find -g "*.go" "func"             # 只在 Go 文件中搜索
 gx find -i "pattern"                 # 忽略大小写搜索
-gx find -j 4 "pattern"               # 使用 4 个工作线程
+gx find -j 4 "pattern"               # 使用 4 个工作线程（默认 1，-j 0 = 全部核心）
 gx find -n "pattern"                 # 显示行号（默认）
 gx find -N "pattern"                 # 隐藏行号
 gx find --no-color "pattern"         # 禁用彩色输出
@@ -131,7 +172,7 @@ gx replace -f "TODO" -r "FIXME" -x   # 执行替换
 gx replace -F "pattern" "replace"    # 将模式视为字面字符串
 gx replace -g "*.go" "func" "FUNC"   # 只在 Go 文件中替换
 gx replace -i "pattern" "replace"    # 忽略大小写搜索
-gx replace -j 4 "pattern" "replace"  # 使用 4 个工作线程
+gx replace -j 4 "pattern" "replace"  # 使用 4 个工作线程（默认 1，-j 0 = 全部核心）
 gx replace -n "pattern" "replace"    # 显示行号（默认）
 gx replace -N "pattern" "replace"    # 隐藏行号
 gx replace --no-color "pattern" "replace"  # 禁用彩色输出
@@ -178,15 +219,29 @@ gx rename -F "[test]" "demo" -x      # 替换字面字符串 '[test]'
 ```bash
 git clone https://github.com/azhai/gx.git
 cd gx
-make build
+make one       # 构建本机二进制（bin/gx）
+make build     # 交叉编译全平台
+make release   # 交叉编译 + 生成 SHA256SUMS
 ```
 
-或使用 Makefile 目标：
+交叉编译产物以 git 标签和短提交号命名：
+
+```
+bin/gx-<version>-<os>-<arch>     # 例：bin/gx-v0.2.0-darwin-arm64
+```
+
+支持的目标：`darwin-arm64`、`darwin-amd64`、`linux-arm64`、
+`linux-amd64`、`windows-amd64`。
+
+版本和提交号通过 `-ldflags` 注入，因此 `./bin/gx --version`
+会报告它所基于的确切标签和提交。
+
+其它 Makefile 目标：
 
 ```bash
-make gx        # 构建 gx 二进制文件
 make clean     # 删除旧的二进制文件
 make upx       # 构建并使用 upx 压缩
+make upxx      # 构建并使用 upx --ultra-brute 压缩
 ```
 
 ## 运行测试

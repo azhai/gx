@@ -7,7 +7,7 @@ A fast file search and batch rename tool written in Go.
 ## Features
 
 - **find**: Fast file content search (inspired by ripgrep)
-  - Multi-threaded search
+  - Single-process by default, multi-process via `-j N` / `-j 0` (all cores)
   - Regular expression support
   - Colored output with highlighting
   - Line number display
@@ -15,7 +15,7 @@ A fast file search and batch rename tool written in Go.
   - Binary file detection
 
 - **replace**: Fast file content search and replace (inspired by ripgrep)
-  - Multi-threaded search and replace
+  - Single-process by default, multi-process via `-j N` / `-j 0` (all cores)
   - Regular expression support
   - Colored output with highlighting
   - Line number display
@@ -38,8 +38,12 @@ A fast file search and batch rename tool written in Go.
 ```
 gx/
 ├── cmd/
+│   ├── find/          # File content search command (grep-like)
 │   ├── replace/       # File content search and replace command
 │   └── rename/        # Batch file rename command
+├── pkg/
+│   ├── processor/    # Shared walk + worker-pool engine
+│   └── stream/        # Unified stdin/file input
 ├── args/              # Shared argument parsing functionality
 ├── regex/             # Regular expression matching wrapper
 ├── walker/            # Concurrent file system traversal
@@ -65,6 +69,14 @@ gx/
   - Glob pattern filtering
   - Binary file detection
 
+- **pkg/processor**: Shared file-processing engine:
+  - Worker-pool pipeline over walker output
+  - `FileProcessor` interface (ProcessFile + HandleResult) reused by find/replace
+
+- **pkg/stream**: Unified stdin/file input:
+  - `IsStdin` / `OpenInput` / `ReadAll`
+  - Virtual filename `<stdin>` for match reporting (used by later commands)
+
 ## Installation
 
 ```bash
@@ -82,17 +94,49 @@ make build
 ## Usage
 
 ```
-gx - A collection of file utilities
+gx - A handy text-processing utility (sed/awk style)
 
 Usage: gx <command> [OPTIONS] [ARGS...]
 
 Commands:
-  find    Search for patterns in files (like grep)
-  replace Search and replace text in files
-  rename  Batch rename files
+  find     Search for patterns in files (like grep)
+  replace  Search and replace text in files
+  rename   Batch rename files
 
-Use "gx <command> --help" for more information about a command.
+Global Flags:
+  -h, --help       Show help
+  -V, --version    Show version
+
+Use "gx <command> --help" for command-specific options.
 ```
+
+### Exit Codes
+
+| Code | Meaning                                      |
+|------|----------------------------------------------|
+| 0    | Success, matches/changes found               |
+| 1    | Success, but no matches / no files renamed   |
+| 2    | Error (bad args, IO failure, etc.)           |
+
+Exit codes follow the grep convention, so `gx` composes naturally in
+shell pipelines and conditionals:
+
+```bash
+if gx find "TODO" src/; then
+  echo "has TODOs"
+fi
+```
+
+### Version
+
+```bash
+gx --version      # print version + commit
+gx -V             # short form
+```
+
+The version is injected at build time from git (see `make one` /
+`make build`), so a binary reports the exact tag and commit it was
+built from.
 
 ### find - File Content Search
 
@@ -105,7 +149,7 @@ gx find "pattern" /path/to/dir       # Search in specific directory
 gx find -F "pattern"                 # Treat pattern as literal string
 gx find -g "*.go" "func"             # Search only in Go files
 gx find -i "pattern"                 # Case insensitive search
-gx find -j 4 "pattern"               # Use 4 worker threads
+gx find -j 4 "pattern"               # Use 4 worker threads (default 1, -j 0 = all cores)
 gx find -n "pattern"                 # Show line numbers (default)
 gx find -N "pattern"                 # Hide line numbers
 gx find --no-color "pattern"         # Disable colored output
@@ -131,7 +175,7 @@ gx replace -f "TODO" -r "FIXME" -x   # Execute replacement
 gx replace -F "pattern" "replace"    # Treat pattern as literal string
 gx replace -g "*.go" "func" "FUNC"   # Replace only in Go files
 gx replace -i "pattern" "replace"    # Case insensitive search
-gx replace -j 4 "pattern" "replace"  # Use 4 worker threads
+gx replace -j 4 "pattern" "replace"  # Use 4 worker threads (default 1, -j 0 = all cores)
 gx replace -n "pattern" "replace"    # Show line numbers (default)
 gx replace -N "pattern" "replace"    # Hide line numbers
 gx replace --no-color "pattern" "replace"  # Disable colored output
@@ -178,15 +222,29 @@ gx rename -F "[test]" "demo" -x      # Replace literal string '[test]'
 ```bash
 git clone https://github.com/azhai/gx.git
 cd gx
-make build
+make one       # Build native binary (bin/gx)
+make build     # Cross-compile all platforms
+make release   # Cross-compile + SHA256SUMS
 ```
 
-Or use Makefile targets:
+Cross-compile outputs are versioned with the git tag and short commit:
+
+```
+bin/gx-<version>-<os>-<arch>     # e.g. bin/gx-v0.2.0-darwin-arm64
+```
+
+Supported targets: `darwin-arm64`, `darwin-amd64`, `linux-arm64`,
+`linux-amd64`, `windows-amd64`.
+
+The version and commit are injected via `-ldflags`, so `./bin/gx --version`
+reports the exact tag and commit it was built from.
+
+Other Makefile targets:
 
 ```bash
-make gx        # Build gx binary
 make clean     # Remove old binaries
 make upx       # Build and compress with upx
+make upxx      # Build and compress with upx --ultra-brute
 ```
 
 ## Running Tests
