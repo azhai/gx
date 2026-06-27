@@ -308,18 +308,22 @@ func (r *Renamer) Execute() error {
 	return nil
 }
 
-// Run runs the complete rename workflow:
-// 1. Collect files to rename
-// 2. Detect conflicts
-// 3. Print preview
-// 4. Execute rename operations
-func (r *Renamer) Run() {
+// Run runs the complete rename workflow and returns the process exit code:
+//   - 0: success, files were renamed (or previewed in dry-run)
+//   - 1: no files matched the pattern (grep convention)
+//   - 2: execution error (e.g. unresolved conflicts)
+func (r *Renamer) Run() int {
 	r.CollectFiles()
 	r.DetectConflicts()
 	r.PrintPreview()
 
 	if err := r.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "\x1b[31mError: %v\x1b[0m\n", err)
-		os.Exit(1)
+		return 2
 	}
+
+	if len(r.ops) == 0 {
+		return 1 // no files matched → exit 1 (spec 4.2)
+	}
+	return 0
 }

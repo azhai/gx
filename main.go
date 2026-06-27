@@ -106,14 +106,14 @@ func runReplace() {
 func runRename() {
 	config := rename.NewConfig()
 	if !config.ParseArgs() {
-		os.Exit(1)
+		os.Exit(2) // argument error → exit 2 (spec 4.4)
 	}
 
 	renamer, err := rename.NewRenamer(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(2) // invalid pattern → exit 2 (spec 4.4)
 	}
 
-	renamer.Run()
+	os.Exit(renamer.Run())
 }
