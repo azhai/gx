@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"runtime"
 	"sync"
 
 	"github.com/azhai/gx/args"
+	"github.com/azhai/gx/pkg/processor"
 	"github.com/azhai/gx/regex"
 	"github.com/azhai/gx/walker"
 )
@@ -40,7 +40,11 @@ type Match struct {
 }
 
 // Searcher performs search and replace operations.
-// It uses concurrent workers to process multiple files in parallel.
+//
+// Search mode uses processor.Engine for the walk + worker-pool pipeline
+// (ProcessFile/HandleResult implement FileProcessor). Replace mode keeps
+// its own worker pool because it reads whole files and writes them back,
+// a different pattern from line-by-line search.
 type Searcher struct {
 	// config holds the searcher configuration
 	config *Config
@@ -48,21 +52,24 @@ type Searcher struct {
 	matcher *regex.Matcher
 	// results is the channel through which match results are sent
 	results chan Match
-	// wg is used for synchronization of worker goroutines
-	wg sync.WaitGroup
 }
 
 // NewConfig creates a new Config with default values.
+//
+// Default Workers is 1 (single-process, matching grep/sed defaults) for
+// predictable resource usage. Use `-j 0` to opt into all CPU cores, or
+// `-j N` for an explicit count.
+//
 // Default values:
 //   - ShowLineNum: true
 //   - Color: true
-//   - Workers: number of CPU cores
+//   - Workers: 1
 //   - DryRun: true
 func NewConfig() *Config {
 	return &Config{
 		ShowLineNum: true,
 		Color:       true,
-		Workers:     runtime.NumCPU(),
+		Workers:     1,
 		CommonConfig: args.CommonConfig{
 			DryRun: true,
 		},
@@ -97,7 +104,7 @@ func (c *Config) getOptions() []args.Option {
 		},
 		{
 			Short: "-j", Long: "--threads", HasValue: true, ValueName: "N",
-			Help: "Number of worker threads",
+			Help: "Worker threads (0 = all cores, default 1)",
 			Handler: func(v string, cfg *args.CommonConfig) bool {
 				fmt.Sscanf(v, "%d", &c.Workers)
 				return true
@@ -199,53 +206,22 @@ func NewSearcher(config *Config) (*Searcher, error) {
 }
 
 // Search performs a search operation across all files.
-// It uses concurrent workers to process files in parallel and sends
-// match results to the results channel.
+// It delegates the walk + worker-pool pipeline to processor.Engine and
+// forwards each result to the results channel (drained by PrintResults).
 func (s *Searcher) Search() {
-	walkerConfig := walker.NewConfig()
-	walkerConfig.Paths = s.config.Paths
-	walkerConfig.FilePattern = s.config.FilePattern
-	walkerConfig.SkipBinary = true
-
-	fileWalker := walker.New(walkerConfig)
-	files := fileWalker.Walk()
-
-	filesChan := make(chan walker.FileInfo, 1000)
+	s.results = make(chan Match, 1000)
 	go func() {
-		for f := range files {
-			filesChan <- f
-		}
-		close(filesChan)
-	}()
-
-	var wg sync.WaitGroup
-	for i := 0; i < s.config.Workers; i++ {
-		wg.Add(1)
-		go s.searchWorker(filesChan, &wg)
-	}
-
-	go func() {
-		wg.Wait()
+		s.newEngine(true).Run()
 		close(s.results)
 	}()
 }
 
-// searchWorker is a worker function that processes files from the channel.
-// It reads each file and sends matches to the results channel.
-func (s *Searcher) searchWorker(files <-chan walker.FileInfo, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for file := range files {
-		s.searchFile(file.Path)
-	}
-}
-
-// searchFile searches for matches in a single file.
-// It reads the file line by line and sends matches to the results channel.
-func (s *Searcher) searchFile(path string) {
+// ProcessFile implements processor.FileProcessor.
+// It reads the file line by line and returns all matches as results.
+func (s *Searcher) ProcessFile(path string) []processor.Result {
 	file, err := os.Open(path)
 	if err != nil {
-		return
+		return nil
 	}
 	defer file.Close()
 
@@ -253,22 +229,47 @@ func (s *Searcher) searchFile(path string) {
 	// bufio.Scanner's default max token size is 64KB, which silently
 	// truncates long lines (e.g. minified JS). Raise to 1MB.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	lineNum := 0
 
+	var results []processor.Result
+	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Bytes()
 
 		matches := s.matcher.FindAll(line)
 		if matches != nil {
-			s.results <- Match{
+			results = append(results, processor.Result{
 				Path:    path,
 				LineNum: lineNum,
 				Line:    string(line),
 				Matches: matches,
-			}
+			})
 		}
 	}
+	return results
+}
+
+// HandleResult implements processor.FileProcessor.
+// It forwards the result to the results channel for PrintResults to drain.
+func (s *Searcher) HandleResult(r processor.Result) {
+	s.results <- Match{
+		Path:    r.Path,
+		LineNum: r.LineNum,
+		Line:    r.Line,
+		Matches: r.Matches,
+	}
+}
+
+// newEngine builds a processor.Engine wired to this searcher's walker config.
+// skipBinary controls whether binary files are skipped (search skips them,
+// replace reads them since it may rewrite).
+func (s *Searcher) newEngine(skipBinary bool) *processor.Engine {
+	walkerConfig := walker.NewConfig()
+	walkerConfig.Paths = s.config.Paths
+	walkerConfig.FilePattern = s.config.FilePattern
+	walkerConfig.SkipBinary = skipBinary
+	w := walker.New(walkerConfig)
+	return processor.New(w, s.matcher, s, s.config.Workers)
 }
 
 // PrintResults prints all matches from the results channel.
