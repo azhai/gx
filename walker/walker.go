@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 )
 
@@ -46,8 +45,6 @@ type Config struct {
 	FilePattern string
 	// SkipDirs is a set of directory names to skip during traversal
 	SkipDirs map[string]bool
-	// Workers is the number of concurrent workers (not currently used)
-	Workers int
 	// IncludeDir indicates whether to include directories in the output
 	IncludeDir bool
 	// SkipBinary indicates whether to skip binary files
@@ -68,11 +65,9 @@ type Walker struct {
 // NewConfig creates a new Config with default values.
 // Default values:
 //   - SkipDirs: DefaultSkipDirs
-//   - Workers: number of CPU cores
 func NewConfig() *Config {
 	return &Config{
 		SkipDirs: DefaultSkipDirs,
-		Workers:  runtime.NumCPU(),
 	}
 }
 
@@ -80,13 +75,9 @@ func NewConfig() *Config {
 // It sets default values for any missing configuration fields.
 //
 // Default values:
-//   - Workers: number of CPU cores (if <= 0)
 //   - SkipDirs: DefaultSkipDirs (if nil)
 //   - Paths: ["."] (if empty)
 func New(config *Config) *Walker {
-	if config.Workers <= 0 {
-		config.Workers = runtime.NumCPU()
-	}
 	if config.SkipDirs == nil {
 		config.SkipDirs = DefaultSkipDirs
 	}

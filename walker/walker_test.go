@@ -37,9 +37,6 @@ func TestNewConfig(t *testing.T) {
 	if len(config.SkipDirs) == 0 {
 		t.Error("NewConfig() SkipDirs should not be empty")
 	}
-	if config.Workers <= 0 {
-		t.Error("NewConfig() Workers should be positive")
-	}
 }
 
 func TestWalker_Walk(t *testing.T) {
@@ -529,7 +526,6 @@ func TestWalker_ConcurrentWalk(t *testing.T) {
 
 	config := NewConfig()
 	config.Paths = []string{dir}
-	config.Workers = 4
 
 	walker := New(config)
 	files := walker.Walk()
