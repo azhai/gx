@@ -12,12 +12,8 @@ import (
 type Config struct {
 	// Pattern is the regular expression pattern to match
 	Pattern string
-	// Replace is the replacement string (not used in Matcher, kept for compatibility)
-	Replace string
 	// IgnoreCase enables case-insensitive matching
 	IgnoreCase bool
-	// Global enables global matching (match all occurrences)
-	Global bool
 	// FixedString treats the pattern as a literal string instead of regex
 	FixedString bool
 }
@@ -107,37 +103,6 @@ func (m *Matcher) ReplaceAllString(s string, replace string) string {
 // subexpressions. The return value is nil if no match is found.
 func (m *Matcher) FindStringSubmatch(s string) []string {
 	return m.regex.FindStringSubmatch(s)
-}
-
-// ReplaceWithSubmatches replaces matches in the string using a replacement pattern.
-// The replacement pattern can contain $1, $2, etc. to reference captured groups.
-// This is a custom implementation that handles submatch replacement.
-//
-// Example:
-//
-//	pattern: "(\w+)@(\w+)"
-//	input: "user@domain"
-//	replacePattern: "$2:$1"
-//	result: "domain:user"
-func (m *Matcher) ReplaceWithSubmatches(s string, replacePattern string) string {
-	result := replacePattern
-	submatches := m.regex.FindStringSubmatchIndex(s)
-
-	if submatches == nil {
-		return s
-	}
-
-	// Replace group placeholders from highest to lowest to avoid index shifting
-	for i := len(submatches) - 2; i >= 2; i -= 2 {
-		if submatches[i] != -1 {
-			groupNum := (i-2)/2 + 1
-			placeholder := fmt.Sprintf("$%d", groupNum)
-			value := s[submatches[i]:submatches[i+1]]
-			result = regexp.MustCompile(regexp.QuoteMeta(placeholder)).ReplaceAllString(result, value)
-		}
-	}
-
-	return result
 }
 
 // GetPattern returns the processed pattern string (may include flags).

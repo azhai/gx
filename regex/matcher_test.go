@@ -221,32 +221,6 @@ func TestMatcher_ReplaceAllString(t *testing.T) {
 	}
 }
 
-func TestMatcher_ReplaceWithGroups(t *testing.T) {
-	m, err := NewMatcher(&Config{Pattern: `(\w+)@(\w+)\.com`})
-	if err != nil {
-		t.Fatalf("NewMatcher() error = %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		input   string
-		replace string
-		want    string
-	}{
-		{"email replacement", "user@example.com", "$1 at $2", "user at example"},
-		{"no match", "hello world", "$1", "hello world"},
-		{"swap groups", "user@example.com", "$2@$1.com", "example@user.com"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := m.ReplaceWithSubmatches(tt.input, tt.replace); got != tt.want {
-				t.Errorf("ReplaceWithSubmatches(%q, %q) = %q, want %q", tt.input, tt.replace, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestMatcher_FixedString(t *testing.T) {
 	m, err := NewMatcher(&Config{Pattern: "[test]", FixedString: true})
 	if err != nil {
