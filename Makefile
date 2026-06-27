@@ -1,6 +1,9 @@
 SINGLETON = gx
 COMMANDS  =
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+LDFLAGS = -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
 ifndef GOAMD64
 	GOAMD64 = v2
@@ -15,16 +18,18 @@ endif
 
 GOBIN    = go
 UPXBIN   = upx
-RELEASE  = "-s -w"
-GOBUILD  = $(GOARGS) $(GOBIN) build -ldflags=$(RELEASE)
+GOBUILD  = $(GOARGS) $(GOBIN) build -ldflags="$(LDFLAGS)"
 BINFILES = $(SINGLETON) $(COMMANDS)
 
+TARGETS = darwin-arm64 darwin-amd64 linux-arm64 linux-amd64 windows-amd64
 
-.PHONY: one all build clean upx upxx $(BINFILES)
+.PHONY: one all build clean upx upxx release $(BINFILES)
 
 one:
-	@echo "Compile one ($(GOOS)/$(GOARCH)) ..."
-	CGO_ENABLED=1 $(GOBUILD) -o ./bin/$(SINGLETON) ./
+	@echo "Compile one ($(GOOS)/$(GOARCH), v=$(VERSION))..."
+ifneq ($(SINGLETON),)
+		CGO_ENABLED=1 $(GOBUILD) -o ./bin/$(SINGLETON) ./
+endif
 	for one in $(COMMANDS); do \
 		CGO_ENABLED=1 $(GOBUILD) -o ./bin/$$one ./cmd/$$one; \
 	done
@@ -35,23 +40,26 @@ build: $(BINFILES)
 	@echo "✅ Build success."
 
 $(SINGLETON):
-	@echo "Compile $@ ..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -o ./bin/$@.darwin-arm64 ./
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -o ./bin/$@.darwin-amd64 ./
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -o ./bin/$@.linux-arm64 ./
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -o ./bin/$@.linux-amd64 ./
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -o ./bin/$@.windows-amd64 ./
+	@echo "Compile $@ (v=$(VERSION))..."
+	@for target in $(TARGETS); do \
+		os=$${target%-*}; \
+		arch=$${target#*-}; \
+		echo "  -> $$os/$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GOBUILD) -o ./bin/$@-$(VERSION)-$$target ./; \
+	done
 
 $(COMMANDS):
-	@echo "Compile $@ ..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -o ./bin/$@.darwin-arm64 ./cmd/$@
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -o ./bin/$@.darwin-amd64 ./cmd/$@
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -o ./bin/$@.linux-arm64 ./cmd/$@
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD) -o ./bin/$@.linux-amd64 ./cmd/$@
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GOBUILD) -o ./bin/$@.windows-amd64 ./cmd/$@
+	@echo "Compile $@ (v=$(VERSION))..."
+	@for target in $(TARGETS); do \
+		os=$${target%-*}; \
+		arch=$${target#*-}; \
+		echo "  -> $$os/$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GOBUILD) -o ./bin/$@-$(VERSION)-$$target ./cmd/$@; \
+	done
 
 clean:
 	rm -f $(BINFILES:%=./bin/%)
+	rm -f ./bin/$(SINGLETON)-*
 	@echo "✅ Clean complete."
 
 upx: clean one
@@ -59,3 +67,9 @@ upx: clean one
 
 upxx: clean one
 	$(UPXBIN) --ultra-brute $(BINFILES:%=./bin/%)
+
+release: clean build
+	@echo "📦 Generating SHA256SUMS..."
+	cd bin && sha256sum * > SHA256SUMS
+	@echo "✅ Release artifacts in bin/ (version $(VERSION)):"
+	@ls -lh bin/
