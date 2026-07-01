@@ -79,6 +79,14 @@ func NewConfig() *Config {
 func (c *Config) getOptions() []args.Option {
 	return []args.Option{
 		{
+			Short: "-A", Long: "--all",
+			Help: "Search all files (ignore .gitignore)",
+			Handler: func(_ string, cfg *args.CommonConfig) bool {
+				cfg.IgnoreGitignore = true
+				return true
+			},
+		},
+		{
 			Short: "-F", Long: "--fixed-strings",
 			Help: "Treat pattern as literal string",
 			Handler: func(_ string, cfg *args.CommonConfig) bool {
@@ -268,6 +276,7 @@ func (s *Searcher) newEngine(skipBinary bool) *processor.Engine {
 	walkerConfig.Paths = s.config.Paths
 	walkerConfig.FilePattern = s.config.FilePattern
 	walkerConfig.SkipBinary = skipBinary
+	walkerConfig.IgnoreGitignore = s.config.CommonConfig.IgnoreGitignore
 	w := walker.New(walkerConfig)
 	return processor.New(w, s.matcher, s, s.config.Workers)
 }
@@ -311,6 +320,7 @@ func (s *Searcher) Replace() {
 	walkerConfig.Paths = s.config.Paths
 	walkerConfig.FilePattern = s.config.FilePattern
 	walkerConfig.SkipBinary = false
+	walkerConfig.IgnoreGitignore = s.config.CommonConfig.IgnoreGitignore
 
 	fileWalker := walker.New(walkerConfig)
 	files := fileWalker.Walk()

@@ -26,6 +26,8 @@ type CommonConfig struct {
 	FilePattern string
 	// DryRun enables dry-run mode (preview without making changes)
 	DryRun bool
+	// IgnoreGitignore enables --all mode (ignore .gitignore rules)
+	IgnoreGitignore bool
 }
 
 // OptionHandler is a function type that handles an option value.

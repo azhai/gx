@@ -576,3 +576,181 @@ func TestIsBinaryFile(t *testing.T) {
 		})
 	}
 }
+
+func TestWalker_Gitignore_SingleLevel(t *testing.T) {
+	dir := createTestDir(t, "walker_gitignore_test")
+	defer os.RemoveAll(dir)
+
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0644)
+	createTestFile(t, dir, "error.log", "error content")
+	createTestFile(t, dir, "main.go", "package main")
+
+	config := NewConfig()
+	config.Paths = []string{dir}
+
+	walker := New(config)
+	files := walker.Walk()
+
+	var names []string
+	for f := range files {
+		names = append(names, f.Name)
+	}
+
+	for _, n := range names {
+		if n == "error.log" {
+			t.Error("*.log should be ignored by gitignore")
+		}
+	}
+
+	found := false
+	for _, n := range names {
+		if n == "main.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("main.go should not be ignored")
+	}
+}
+
+func TestWalker_Gitignore_MultiLevel(t *testing.T) {
+	dir := createTestDir(t, "walker_gitignore_multi_test")
+	defer os.RemoveAll(dir)
+
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0644)
+	createTestFile(t, dir, "error.log", "error")
+
+	subDir := filepath.Join(dir, "sub")
+	os.MkdirAll(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, ".gitignore"), []byte("!debug.log\n"), 0644)
+	createTestFile(t, subDir, "debug.log", "debug")
+	createTestFile(t, subDir, "other.log", "other")
+
+	config := NewConfig()
+	config.Paths = []string{dir}
+
+	walker := New(config)
+	files := walker.Walk()
+
+	var names []string
+	for f := range files {
+		names = append(names, f.Name)
+	}
+
+	for _, n := range names {
+		if n == "other.log" {
+			t.Error("*.log should be ignored in subdirectory")
+		}
+	}
+
+	foundDebug := false
+	for _, n := range names {
+		if n == "debug.log" {
+			foundDebug = true
+		}
+	}
+	if !foundDebug {
+		t.Error("!debug.log should un-ignore debug.log in subdirectory")
+	}
+}
+
+func TestWalker_Gitignore_IgnoreGitignore(t *testing.T) {
+	dir := createTestDir(t, "walker_gitignore_all_test")
+	defer os.RemoveAll(dir)
+
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0644)
+	createTestFile(t, dir, "error.log", "error content")
+	createTestFile(t, dir, "main.go", "package main")
+
+	config := NewConfig()
+	config.Paths = []string{dir}
+	config.IgnoreGitignore = true
+
+	walker := New(config)
+	files := walker.Walk()
+
+	var names []string
+	for f := range files {
+		names = append(names, f.Name)
+	}
+
+	found := false
+	for _, n := range names {
+		if n == "error.log" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("--all mode should include .log files")
+	}
+}
+
+func TestWalker_Gitignore_NoGitignoreFile(t *testing.T) {
+	dir := createTestDir(t, "walker_gitignore_none_test")
+	defer os.RemoveAll(dir)
+
+	createTestFile(t, dir, "test.txt", "content")
+
+	config := NewConfig()
+	config.Paths = []string{dir}
+
+	walker := New(config)
+	files := walker.Walk()
+
+	count := 0
+	for range files {
+		count++
+	}
+
+	if count != 1 {
+		t.Errorf("expected 1 file without gitignore, got %d", count)
+	}
+}
+
+func TestWalker_Gitignore_DoesNotAffectDefaultSkipDirs(t *testing.T) {
+	dir := createTestDir(t, "walker_gitignore_skipdir_test")
+	defer os.RemoveAll(dir)
+
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("!*\n"), 0644)
+
+	gitDir := filepath.Join(dir, ".git")
+	os.MkdirAll(gitDir, 0755)
+	createTestFile(t, dir, ".git/config", "git config")
+
+	config := NewConfig()
+	config.Paths = []string{dir}
+	config.IgnoreGitignore = true
+
+	walker := New(config)
+	files := walker.Walk()
+
+	for f := range files {
+		if f.Name == "config" {
+			t.Error(".git directory should still be skipped even with --all")
+		}
+	}
+}
+
+func TestWalker_Gitignore_FileItselfVisible(t *testing.T) {
+	dir := createTestDir(t, "walker_gitignore_self_test")
+	defer os.RemoveAll(dir)
+
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0644)
+	createTestFile(t, dir, "error.log", "error")
+
+	config := NewConfig()
+	config.Paths = []string{dir}
+
+	walker := New(config)
+	files := walker.Walk()
+
+	foundGitignore := false
+	for f := range files {
+		if f.Name == ".gitignore" {
+			foundGitignore = true
+		}
+	}
+	if !foundGitignore {
+		t.Error(".gitignore file itself should not be ignored by its own rules")
+	}
+}

@@ -20,6 +20,7 @@ type Config struct {
 	Color       bool
 	Workers     int
 	FixedString bool
+	FilesOnly   bool
 }
 
 // NewConfig creates a Config with find defaults.
@@ -39,6 +40,8 @@ func NewConfig() *Config {
 
 func (c *Config) getOptions() []args.Option {
 	return []args.Option{
+		{Short: "-A", Long: "--all", Help: "Search all files (ignore .gitignore)",
+			Handler: func(_ string, cfg *args.CommonConfig) bool { cfg.IgnoreGitignore = true; return true }},
 		{Short: "-F", Long: "--fixed-strings", Help: "Treat pattern as literal string",
 			Handler: func(_ string, _ *args.CommonConfig) bool { c.FixedString = true; return true }},
 		{Short: "-g", Long: "--glob", HasValue: true, ValueName: "PATTERN", Help: "File glob pattern",
@@ -47,6 +50,8 @@ func (c *Config) getOptions() []args.Option {
 			Handler: func(_ string, _ *args.CommonConfig) bool { c.CommonConfig.IgnoreCase = true; return true }},
 		{Short: "-j", Long: "--threads", HasValue: true, ValueName: "N", Help: "Worker threads (0 = all cores, default 1)",
 			Handler: func(v string, _ *args.CommonConfig) bool { fmt.Sscanf(v, "%d", &c.Workers); return true }},
+		{Short: "-l", Long: "--files-with-matches", Help: "Print only file paths with matches",
+			Handler: func(_ string, _ *args.CommonConfig) bool { c.FilesOnly = true; return true }},
 		{Short: "-n", Long: "--line-number", Help: "Show line numbers (default)",
 			Handler: func(_ string, _ *args.CommonConfig) bool { c.ShowLineNum = true; return true }},
 		{Short: "-N", Long: "--no-line-number", Help: "Hide line numbers",
@@ -60,7 +65,15 @@ func (c *Config) getOptions() []args.Option {
 
 // ParseArgs parses command-line arguments.
 func (c *Config) ParseArgs() bool {
-	return args.ParseSimple(os.Args[1:], &c.CommonConfig, c.getOptions(), c.printUsage)
+	if !args.ParseSimple(os.Args[1:], &c.CommonConfig, c.getOptions(), c.printUsage) {
+		return false
+	}
+	if c.Replace != "" {
+		c.Paths = append([]string{c.Replace}, c.Paths...)
+		c.Replace = ""
+		c.ReplaceSet = false
+	}
+	return true
 }
 
 func (c *Config) printUsage() {
@@ -98,6 +111,24 @@ func NewSearcher(config *Config) (*Searcher, error) {
 // ProcessFile implements processor.FileProcessor.
 // Reads the file line by line and returns all matches.
 func (s *Searcher) ProcessFile(path string) []processor.Result {
+	if s.config.FilesOnly {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+		for scanner.Scan() {
+			if s.matcher.FindAll(scanner.Bytes()) != nil {
+				return []processor.Result{{Path: path}}
+			}
+		}
+		return nil
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -105,8 +136,6 @@ func (s *Searcher) ProcessFile(path string) []processor.Result {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
-	// bufio.Scanner's default max token size is 64KB, which silently
-	// truncates long lines (e.g. minified JS). Raise to 1MB.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var results []processor.Result
@@ -141,6 +170,7 @@ func (s *Searcher) Search() {
 		wc.Paths = s.config.Paths
 		wc.FilePattern = s.config.FilePattern
 		wc.SkipBinary = true
+		wc.IgnoreGitignore = s.config.CommonConfig.IgnoreGitignore
 		w := walker.New(wc)
 		processor.New(w, s.matcher, s, s.config.Workers).Run()
 		close(s.results)
@@ -159,6 +189,10 @@ func (s *Searcher) PrintResults() int {
 }
 
 func (s *Searcher) printMatch(r processor.Result) {
+	if s.config.FilesOnly {
+		fmt.Println(r.Path)
+		return
+	}
 	if s.config.ShowLineNum {
 		fmt.Printf("%s:%d:", r.Path, r.LineNum)
 	} else {

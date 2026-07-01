@@ -8,10 +8,23 @@
 
 ## 功能特性
 
-- **list**: 列出包含匹配的文件（类似 `grep -l`）
-  - 每个文件首次匹配即短路，不扫描完整内容
-  - 与 `find` 相同的 glob / 正则 / 并发选项
-  - 可与 `xargs` 组合批量处理匹配文件
+- **list**: 列出文件和目录（类似 `ls`）
+  - 递归列举文件/目录，支持 glob、大小和时间过滤
+  - 按名称/大小/修改时间/创建时间/路径排序，支持逆序
+  - 多种输出格式：path（默认）、long（权限+大小+时间+路径）、name
+  - 文件类型过滤（普通文件、目录、符号链接）
+  - 递归深度控制
+  - 大小过滤表达式（`>1M`、`<=100K`）
+  - 时间过滤表达式（相对时间 `<=1h`、`>7d`，绝对时间 `>=2025-01-01`）
+
+- **rename**: 批量文件重命名工具（灵感来自 f2）
+  - 正则表达式匹配
+  - 支持捕获组替换（$1, $2 等）
+  - 干跑模式（执行前预览）
+  - 冲突检测
+  - 支持目录重命名
+  - 强制模式解决冲突
+  - 大小写不敏感文件系统支持
 
 - **find**: 快速文件内容搜索工具（灵感来自 ripgrep）
   - 默认单进程，`-j N` / `-j 0`（全部核心）启用多进程
@@ -20,6 +33,8 @@
   - 行号显示
   - 通过 glob 模式过滤文件
   - 二进制文件检测
+  - 默认遵循 `.gitignore`，使用 `--all`/`-A` 搜索被忽略的文件
+  - `-l`/`--files-with-matches` 模式：仅输出文件路径（类似 `grep -l`）
 
 - **replace**: 快速文件内容搜索和替换工具（灵感来自 ripgrep）
   - 默认单进程，`-j N` / `-j 0`（全部核心）启用多进程
@@ -30,15 +45,7 @@
   - 二进制文件检测
   - 干跑模式（执行前预览）
   - 直观的参数解析（2参数智能模式）
-
-- **rename**: 批量文件重命名工具（灵感来自 f2）
-  - 正则表达式匹配
-  - 支持捕获组替换（$1, $2 等）
-  - 干跑模式（执行前预览）
-  - 冲突检测
-  - 支持目录重命名
-  - 强制模式解决冲突
-  - 大小写不敏感文件系统支持
+  - 默认遵循 `.gitignore`，使用 `--all`/`-A` 搜索被忽略的文件
 
 - **cut**: 从分隔文本中提取字段（POSIX `cut` 子集）
   - 仅 `-f` 字段模式（不支持 `-c`/`-b`）
@@ -64,9 +71,10 @@
 
 ```
 gx/
+├── common/           # 共享工具（大小/时间表达式、gitignore）
 ├── cmd/
 │   ├── find/          # 文件内容搜索命令（类似 grep）
-│   ├── list/          # 列出包含匹配的文件（类似 grep -l）
+│   ├── list/          # 列出文件和目录（类似 ls）
 │   ├── replace/       # 文件内容搜索和替换命令
 │   ├── rename/        # 批量文件重命名命令
 │   ├── cut/           # 字段提取（cut -f 子集）
@@ -96,8 +104,15 @@ gx/
 
 - **walker**: 并发文件系统遍历，支持：
   - 目录跳过（.git、node_modules 等）
+  - `.gitignore` 感知遍历（惰性加载、多级继承）
   - Glob 模式过滤
   - 二进制文件检测
+  - 递归深度控制
+
+- **common**: 共享工具库：
+  - `sizeexpr`: 大小过滤表达式解析器（`>1M`、`<=100K`）
+  - `timeexpr`: 时间过滤表达式解析器（相对时间 `<=1h`、绝对时间 `>=2025-01-01`）
+  - `gitignore`: .gitignore 规则解析和匹配器
 
 - **processor**: 共享的文件处理引擎：
   - 基于 walker 输出的工作池流水线
@@ -177,10 +192,12 @@ gx find "pattern"                    # 在当前目录搜索
 gx find "pattern" /path/to/dir       # 在指定目录搜索
 
 # 搜索选项
+gx find -A "pattern"                 # 搜索所有文件（忽略 .gitignore）
 gx find -F "pattern"                 # 将模式视为字面字符串
 gx find -g "*.go" "func"             # 只在 Go 文件中搜索
 gx find -i "pattern"                 # 忽略大小写搜索
 gx find -j 4 "pattern"               # 使用 4 个工作线程（默认 1，-j 0 = 全部核心）
+gx find -l "pattern"                 # 仅输出包含匹配的文件路径（类似 grep -l）
 gx find -n "pattern"                 # 显示行号（默认）
 gx find -N "pattern"                 # 隐藏行号
 gx find --no-color "pattern"         # 禁用彩色输出
@@ -189,6 +206,10 @@ gx find --no-color "pattern"         # 禁用彩色输出
 gx find "TODO" src/                  # 在 src/ 目录搜索 TODO
 gx find -i "error" -g "*.go"         # 在 Go 文件中忽略大小写搜索 error
 gx find "TODO" src/ test/            # 在多个目录搜索 TODO
+gx find --all "debug" ./project      # 搜索被 .gitignore 忽略的文件
+gx find -l -i "error" -g "*.go" ./src  # 列出包含 error 的 Go 文件（忽略大小写）
+gx find -j 0 "pattern" ./large-project  # 多线程搜索（使用全部核心）
+gx find -l "deprecated" -g "*.py" | xargs sed -i 's/deprecated/legacy/g'  # 管道组合
 ```
 
 ### replace - 文件内容搜索和替换
@@ -203,6 +224,7 @@ gx replace -f "pattern" -r "replace" # 显式指定查找和替换
 gx replace -f "TODO" -r "FIXME" -x   # 执行替换
 
 # 替换选项
+gx replace -A "pattern" "replace"    # 搜索所有文件（忽略 .gitignore）
 gx replace -F "pattern" "replace"    # 将模式视为字面字符串
 gx replace -g "*.go" "func" "FUNC"   # 只在 Go 文件中替换
 gx replace -i "pattern" "replace"    # 忽略大小写搜索
@@ -217,6 +239,9 @@ gx replace "TODO" "FIXME"            # 预览：将 TODO 替换为 FIXME
 gx replace "foo" "bar" -x            # 执行：将所有 'foo' 替换为 'bar'
 gx replace -F "[test]" "demo" -x     # 替换字面字符串 '[test]'
 gx replace -i "error" "warning" -g "*.go" -x  # 在 Go 文件中忽略大小写替换
+gx replace --all "old" "new" ./project  # 替换被 .gitignore 忽略的文件
+gx replace "TODO" "FIXME" src/ test/     # 在多个目录替换
+gx find -l "deprecated" -g "*.go" | xargs -I{} gx replace "deprecated" "legacy" -x "{}"  # 管道组合
 ```
 
 ### rename - 批量文件重命名
@@ -248,24 +273,37 @@ gx rename "^" "2024_" -x             # 为所有文件添加 2024_ 前缀
 gx rename -F "[test]" "demo" -x      # 替换字面字符串 '[test]'
 ```
 
-### list - 列出包含匹配的文件
+### list - 列出文件和目录
 
-`list` 是 `find` 的 `grep -l` 对应物：不打印每个匹配行，而是打印
-每个包含至少一处匹配的文件的路径。它会按文件短路，比 `find` 快
-很多（当你只需要文件列表时）。
+`list` 提供类 `ls` 的递归文件/目录列举功能，支持强大的过滤、排序和格式化选项。
 
 ```bash
-# 查找包含某个模式的文件（只打印路径）
-gx list "TODO" src/                   # 类似 grep -rl "TODO" src/
-gx list -g "*.go" "fmt.Sprintf"       # 只在 Go 文件中
-gx list -i "error" logs/              # 忽略大小写
+# 基础列举
+gx list                              # 递归列举当前目录所有文件
+gx list /path/to/dir                 # 列举指定目录
 
-# 配合 xargs 对匹配文件批量操作
-gx list "deprecated" -g "*.py" | xargs sed -i 's/deprecated/legacy/g'
+# 过滤选项
+gx list -g "*.go"                    # 按 glob 模式过滤
+gx list -t f                         # 类型：f=文件, d=目录, l=符号链接, a=全部（默认）
+gx list -S ">1M"                     # 大小过滤：>1M, <=100K, 1024 等
+gx list -M "<=1h"                    # 修改时间过滤：相对时间（<=1h, >7d）或绝对时间（>=2025-01-01）
+gx list --ctime "<=1d"               # 创建时间过滤：语法同修改时间
+
+# 排序和格式
+gx list -s name                      # 排序字段：name, size, mtime, ctime, path
+gx list -s size -r                   # 逆序排序
+gx list --format long                # 长格式：权限、大小、修改时间、路径
+gx list --format name                # 仅文件名格式
+gx list -L 2                         # 最大递归深度（0 = 无限制）
+
+# 示例
+gx list ./src                        # 递归列举 src/ 下所有文件
+gx list -g "*.go" --size ">1K" --mtime "<=1d" ./src  # 今天修改过的 >1K 的 Go 文件
+gx list --format long --sort size --reverse ./data    # 长格式按大小降序
+gx list --type d --max-depth 2 ./project             # 列举深度 2 以内的目录
+gx list -g "*.log" -S ">100M" /var/log               # 查找大于 100MB 的日志文件
+gx list -M "<=1h" -t f ./src                         # 最近 1 小时修改过的文件
 ```
-
-选项同 `find`（`-g`、`-i`、`-F`、`-j`、`--no-color`），但 `-n`/`-N`
-无意义（不打印行号）。
 
 ### cut - 从分隔文本中提取字段
 

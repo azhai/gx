@@ -10,10 +10,14 @@ rename, and classic Unix text filters (cut/trans/script) in one tool.
 
 ## Features
 
-- **list**: List files containing matches (like `grep -l`)
-  - Short-circuits on first match per file (doesn't read the whole file)
-  - Same glob / regex / concurrency options as `find`
-  - Composes with `xargs` for batch operations on matched files
+- **list**: List files and directories with filters (like `ls`)
+  - Recursive file/directory listing with glob, size, and time filters
+  - Sort by name/size/mtime/ctime/path with reverse option
+  - Multiple output formats: path (default), long (permissions + size + time + path), name
+  - File type filtering (regular files, directories, symlinks)
+  - Max recursion depth control
+  - Size filter expressions (`>1M`, `<=100K`)
+  - Time filter expressions (relative `<=1h`, `>7d` and absolute `>=2025-01-01`)
 
 - **find**: Fast file content search (inspired by ripgrep)
   - Single-process by default, multi-process via `-j N` / `-j 0` (all cores)
@@ -22,6 +26,8 @@ rename, and classic Unix text filters (cut/trans/script) in one tool.
   - Line number display
   - File filtering by glob pattern
   - Binary file detection
+  - `.gitignore` aware by default, use `--all`/`-A` to search ignored files
+  - `-l`/`--files-with-matches` mode: print only file paths (like `grep -l`)
 
 - **replace**: Fast file content search and replace (inspired by ripgrep)
   - Single-process by default, multi-process via `-j N` / `-j 0` (all cores)
@@ -32,6 +38,7 @@ rename, and classic Unix text filters (cut/trans/script) in one tool.
   - Binary file detection
   - Dry-run mode for safe preview
   - Intuitive argument parsing (2-argument smart mode)
+  - `.gitignore` aware by default, use `--all`/`-A` to search ignored files
 
 - **rename**: Batch file renaming tool (inspired by f2)
   - Regular expression matching
@@ -69,8 +76,9 @@ rename, and classic Unix text filters (cut/trans/script) in one tool.
 ```
 gx/
 ├── cmd/
+├── common/           # Shared utilities (size/time expressions, gitignore)
 │   ├── find/          # File content search command (grep-like)
-│   ├── list/          # List files containing matches (grep -l)
+│   ├── list/          # List files and directories with filters (ls-like)
 │   ├── replace/       # File content search and replace command
 │   ├── rename/        # Batch file rename command
 │   ├── cut/           # Field extraction (cut -f subset)
@@ -100,8 +108,15 @@ gx/
 
 - **walker**: Concurrent file system traversal with:
   - Directory skipping (.git, node_modules, etc.)
+  - `.gitignore` aware traversal (lazy loading, multi-level inheritance)
   - Glob pattern filtering
   - Binary file detection
+  - Max depth control
+
+- **common**: Shared utilities:
+  - `sizeexpr`: Size filter expression parser (`>1M`, `<=100K`)
+  - `timeexpr`: Time filter expression parser (relative `<=1h`, absolute `>=2025-01-01`)
+  - `gitignore`: .gitignore rule parser and matcher
 
 - **processor**: Shared file-processing engine:
   - Worker-pool pipeline over walker output
@@ -134,7 +149,7 @@ Usage: gx <command> [OPTIONS] [ARGS...]
 
 Commands:
   find     Search for patterns in files (like grep)
-  list     List files containing matches (like grep -l)
+  list     List files and directories with filters (like ls)
   replace  Search and replace text in files
   rename   Batch rename files
   cut      Extract fields from delimited text (like cut -f)
@@ -184,10 +199,12 @@ gx find "pattern"                    # Search in current directory
 gx find "pattern" /path/to/dir       # Search in specific directory
 
 # Search options
+gx find -A "pattern"                 # Search all files (ignore .gitignore)
 gx find -F "pattern"                 # Treat pattern as literal string
 gx find -g "*.go" "func"             # Search only in Go files
 gx find -i "pattern"                 # Case insensitive search
 gx find -j 4 "pattern"               # Use 4 worker threads (default 1, -j 0 = all cores)
+gx find -l "pattern"                 # Print only file paths with matches (like grep -l)
 gx find -n "pattern"                 # Show line numbers (default)
 gx find -N "pattern"                 # Hide line numbers
 gx find --no-color "pattern"         # Disable colored output
@@ -196,6 +213,10 @@ gx find --no-color "pattern"         # Disable colored output
 gx find "TODO" src/                  # Search for TODO in src/
 gx find -i "error" -g "*.go"         # Case insensitive search in Go files
 gx find "TODO" src/ test/            # Search in multiple directories
+gx find --all "debug" ./project      # Search files ignored by .gitignore
+gx find -l -i "error" -g "*.go" ./src  # List Go files containing "error" (case-insensitive)
+gx find -j 0 "pattern" ./large-project  # Multi-threaded search using all cores
+gx find -l "deprecated" -g "*.py" | xargs sed -i 's/deprecated/legacy/g'  # Pipeline
 ```
 
 ### replace - File Content Search and Replace
@@ -210,6 +231,7 @@ gx replace -f "pattern" -r "replace" # Explicit find and replace
 gx replace -f "TODO" -r "FIXME" -x   # Execute replacement
 
 # Replace options
+gx replace -A "pattern" "replace"    # Search all files (ignore .gitignore)
 gx replace -F "pattern" "replace"    # Treat pattern as literal string
 gx replace -g "*.go" "func" "FUNC"   # Replace only in Go files
 gx replace -i "pattern" "replace"    # Case insensitive search
@@ -224,6 +246,9 @@ gx replace "TODO" "FIXME"            # Preview: replace TODO with FIXME
 gx replace "foo" "bar" -x            # Execute: replace all 'foo' with 'bar'
 gx replace -F "[test]" "demo" -x     # Replace literal string '[test]'
 gx replace -i "error" "warning" -g "*.go" -x  # Case insensitive in Go files
+gx replace --all "old" "new" ./project  # Replace in files ignored by .gitignore
+gx replace "TODO" "FIXME" src/ test/     # Replace in multiple directories
+gx find -l "deprecated" -g "*.go" | xargs -I{} gx replace "deprecated" "legacy" -x "{}"  # Pipeline
 ```
 
 ### rename - Batch File Renaming
@@ -255,25 +280,38 @@ gx rename "^" "2024_" -x             # Add date prefix to all files
 gx rename -F "[test]" "demo" -x      # Replace literal string '[test]'
 ```
 
-### list - List Files Containing Matches
+### list - List Files and Directories with Filters
 
-`list` is the `grep -l` counterpart to `find`: instead of printing every
-matching line, it prints the path of each file that contains at least one
-match. It short-circuits per file, so it's much faster than `find` when
-you only need the file list.
+`list` provides `ls`-like recursive file/directory listing with powerful
+filtering, sorting, and formatting options.
 
 ```bash
-# Find files containing a pattern (prints paths only)
-gx list "TODO" src/                   # like grep -rl "TODO" src/
-gx list -g "*.go" "fmt.Sprintf"       # only in Go files
-gx list -i "error" logs/              # case-insensitive
+# Basic listing
+gx list                              # List all files in current directory (recursive)
+gx list /path/to/dir                 # List files in specific directory
 
-# Compose with xargs to act on matched files
-gx list "deprecated" -g "*.py" | xargs sed -i 's/deprecated/legacy/g'
+# Filter options
+gx list -g "*.go"                    # Filter by glob pattern
+gx list -t f                         # Type: f=file, d=directory, l=symlink, a=all (default)
+gx list -S ">1M"                     # Size filter: >1M, <=100K, 1024, etc.
+gx list -M "<=1h"                    # Mtime filter: relative (<=1h, >7d) or absolute (>=2025-01-01)
+gx list --ctime "<=1d"               # Ctime filter: same syntax as mtime
+
+# Sort and format
+gx list -s name                      # Sort by: name, size, mtime, ctime, path
+gx list -s size -r                   # Reverse sort order
+gx list --format long                # Long format: permissions, size, mtime, path
+gx list --format name                # Name only format
+gx list -L 2                         # Max recursion depth (0 = unlimited)
+
+# Examples
+gx list ./src                        # Recursively list all files in src/
+gx list -g "*.go" --size ">1K" --mtime "<=1d" ./src  # Go files >1K modified today
+gx list --format long --sort size --reverse ./data    # Long format sorted by size descending
+gx list --type d --max-depth 2 ./project             # List directories up to depth 2
+gx list -g "*.log" -S ">100M" /var/log               # Find log files larger than 100MB
+gx list -M "<=1h" -t f ./src                         # Files modified in the last hour
 ```
-
-Same options as `find` (`-g`, `-i`, `-F`, `-j`, `--no-color`), except
-`-n`/`-N` are not meaningful (no line numbers are printed).
 
 ### cut - Extract Fields from Delimited Text
 

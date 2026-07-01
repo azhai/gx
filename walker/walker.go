@@ -9,7 +9,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
+
+	"github.com/azhai/gx/common"
 )
 
 // DefaultSkipDirs contains the default directories to skip during traversal.
@@ -36,6 +40,10 @@ type FileInfo struct {
 	IsDir bool
 	// Size is the file size in bytes (0 for directories)
 	Size int64
+	// ModTime is the modification time
+	ModTime time.Time
+	// Mode is the file mode (permission bits + type)
+	Mode fs.FileMode
 }
 
 // Config holds the configuration for a Walker.
@@ -50,17 +58,21 @@ type Config struct {
 	IncludeDir bool
 	// SkipBinary indicates whether to skip binary files
 	SkipBinary bool
+	// MaxDepth limits recursion depth (0 = unlimited)
+	MaxDepth int
+	// IncludeSymlink indicates whether to include symlinks in the output
+	IncludeSymlink bool
+	// IgnoreGitignore indicates whether to ignore .gitignore rules (true = --all mode)
+	IgnoreGitignore bool
 }
 
 // Walker traverses file systems and returns file information.
 // It uses filepath.Walk for directory traversal and supports concurrent processing.
 type Walker struct {
-	// config holds the walker configuration
-	config *Config
-	// files is the channel through which file information is sent
-	files chan FileInfo
-	// wg is used for synchronization (reserved for future use)
-	wg sync.WaitGroup
+	config   *Config
+	files    chan FileInfo
+	wg       sync.WaitGroup
+	matchers map[string]*common.GitignoreMatcher
 }
 
 // NewConfig creates a new Config with default values.
@@ -87,8 +99,9 @@ func New(config *Config) *Walker {
 	}
 
 	return &Walker{
-		config: config,
-		files:  make(chan FileInfo, 1000),
+		config:   config,
+		files:    make(chan FileInfo, 1000),
+		matchers: make(map[string]*common.GitignoreMatcher),
 	}
 }
 
@@ -121,6 +134,8 @@ func (w *Walker) Walk() <-chan FileInfo {
 // file: WalkDir receives a fs.DirEntry, which is cached from the directory
 // read, while Walk receives an os.FileInfo that requires an extra stat.
 func (w *Walker) walkDir(root string) {
+	rootDepth := len(strings.Split(root, string(os.PathSeparator)))
+
 	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -128,58 +143,121 @@ func (w *Walker) walkDir(root string) {
 
 		name := d.Name()
 
-		// Handle directories
+		if w.config.MaxDepth > 0 {
+			currentDepth := len(strings.Split(path, string(os.PathSeparator))) - rootDepth
+			if currentDepth > w.config.MaxDepth {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
 		if d.IsDir() {
-			// Skip configured directories
 			if w.config.SkipDirs[name] {
 				return filepath.SkipDir
 			}
-			// Include directories if configured
+			if !w.config.IgnoreGitignore && w.isIgnored(filepath.Dir(path), name, true) {
+				return filepath.SkipDir
+			}
 			if w.config.IncludeDir {
-				w.files <- FileInfo{
+				info, infoErr := d.Info()
+				fi := FileInfo{
 					Path:  path,
 					Name:  name,
 					IsDir: true,
 					Size:  0,
 				}
+				if infoErr == nil {
+					fi.ModTime = info.ModTime()
+					fi.Mode = info.Mode()
+				}
+				w.files <- fi
 			}
 			return nil
 		}
 
-		// Skip non-regular files (symlinks, devices, etc.)
+		if !w.config.IgnoreGitignore && w.isIgnored(filepath.Dir(path), name, false) {
+			return nil
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			if w.config.IncludeSymlink {
+				info, infoErr := d.Info()
+				fi := FileInfo{
+					Path:  path,
+					Name:  name,
+					IsDir: false,
+					Mode:  os.ModeSymlink,
+				}
+				if infoErr == nil {
+					fi.Size = info.Size()
+					fi.ModTime = info.ModTime()
+					fi.Mode = info.Mode()
+				}
+				w.files <- fi
+			}
+			return nil
+		}
+
 		if !d.Type().IsRegular() {
 			return nil
 		}
 
-		// Apply glob pattern filter
 		if w.config.FilePattern != "" {
-			matched, err := filepath.Match(w.config.FilePattern, name)
-			if err != nil || !matched {
+			matched, matchErr := filepath.Match(w.config.FilePattern, name)
+			if matchErr != nil || !matched {
 				return nil
 			}
 		}
 
-		// Skip binary files if configured
 		if w.config.SkipBinary && w.isBinaryFile(path) {
 			return nil
 		}
 
-		// DirEntry doesn't carry size; stat only for regular files we emit.
 		info, err := d.Info()
 		if err != nil {
 			return nil
 		}
 
-		// Send file info to channel
 		w.files <- FileInfo{
-			Path:  path,
-			Name:  name,
-			IsDir: false,
-			Size:  info.Size(),
+			Path:    path,
+			Name:    name,
+			IsDir:   false,
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+			Mode:    info.Mode(),
 		}
 
 		return nil
 	})
+}
+
+func (w *Walker) loadGitignore(dir string) *common.GitignoreMatcher {
+	if m, ok := w.matchers[dir]; ok {
+		return m
+	}
+
+	parentDir := filepath.Dir(dir)
+	var parent *common.GitignoreMatcher
+	if parentDir != dir {
+		parent = w.loadGitignore(parentDir)
+	}
+
+	m := common.LoadGitignoreFile(dir, parent)
+	w.matchers[dir] = m
+	return m
+}
+
+func (w *Walker) isIgnored(dir string, name string, isDir bool) bool {
+	if name == ".gitignore" {
+		return false
+	}
+	matcher := w.loadGitignore(dir)
+	if matcher == nil {
+		return false
+	}
+	return matcher.Match(name, isDir)
 }
 
 // isBinaryFile checks whether a file is binary by reading the first 512 bytes.

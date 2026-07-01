@@ -87,7 +87,7 @@ Usage: gx <command> [OPTIONS] [ARGS...]
 
 Commands:
   find     Search for patterns in files (like grep)
-  list     List files containing matches (like grep -l)
+  list     List files and directories with filters (like ls)
   replace  Search and replace text in files
   rename   Batch rename files
   cut      Extract fields from delimited text (like cut -f)
@@ -102,7 +102,7 @@ Use "gx <command> --help" for command-specific options.
 
 Examples:
   gx find "pattern" ./src
-  gx list "TODO" -g "*.go"
+  gx list -g "*.go" ./src
   gx replace "old" "new" ./src -x
   gx rename "foo" "bar" -x
   cut -f 2 -d , file.csv
@@ -128,22 +128,19 @@ func runFind() {
 	}
 }
 
-// runList dispatches the list subcommand. Short-circuits with exit 1
-// when no file matched (mirrors `grep -l`).
+// runList dispatches the list subcommand. Lists files and directories
+// with filters (like ls). Returns 0 for results, 1 for no results, 2 for errors.
 func runList() {
 	config := list.NewConfig()
 	if !config.ParseArgs() {
 		os.Exit(2)
 	}
-	searcher, err := list.NewSearcher(config)
+	lister, err := list.NewLister(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(2)
 	}
-	searcher.Search()
-	if searcher.PrintResults() == 0 {
-		os.Exit(1)
-	}
+	os.Exit(lister.Run())
 }
 
 // runReplace dispatches the replace subcommand. Exit 1 covers both
